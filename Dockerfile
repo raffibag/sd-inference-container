@@ -12,12 +12,11 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages for multi-LoRA inference with latest versions
+# Install Python packages for multi-LoRA inference with PyTorch 2.4.0 compatibility
 RUN pip3 install --no-cache-dir \
     diffusers \
     transformers \
     accelerate \
-    xformers --index-url https://download.pytorch.org/whl/cu124 \
     peft \
     safetensors \
     opencv-python \
@@ -26,12 +25,15 @@ RUN pip3 install --no-cache-dir \
     flask \
     boto3
 
+# Install xformers separately with PyTorch 2.4.0 compatibility
+RUN pip3 install --no-cache-dir xformers --index-url https://download.pytorch.org/whl/cu124
+
 # Copy inference scripts
 COPY scripts/ /opt/ml/code/
 WORKDIR /opt/ml/code
 
 # SageMaker inference entry point
-ENV SAGEMAKER_PROGRAM inference.py
+ENV SAGEMAKER_PROGRAM=inference.py
 
 # Create model directory
 RUN mkdir -p /opt/ml/model
