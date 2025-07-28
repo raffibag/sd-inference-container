@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
 
 # Prevent timezone prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages for multi-LoRA inference with PyTorch 2.4.0 compatibility
+# Install Python packages for multi-LoRA inference with PyTorch 2.1.2 compatibility
 RUN pip3 install --no-cache-dir \
     diffusers \
     transformers \
@@ -25,8 +25,8 @@ RUN pip3 install --no-cache-dir \
     flask \
     boto3
 
-# Install xformers separately with PyTorch 2.4.0 compatibility
-RUN pip3 install --no-cache-dir xformers --index-url https://download.pytorch.org/whl/cu124
+# Install xformers separately with PyTorch 2.1.2 compatibility
+RUN pip3 install --no-cache-dir xformers --index-url https://download.pytorch.org/whl/cu121
 
 # Copy inference scripts
 COPY scripts/ /opt/ml/code/
