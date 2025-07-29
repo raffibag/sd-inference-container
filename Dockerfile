@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin exact PyTorch versions for consistency
-RUN pip3 install --no-cache-dir torch==2.1.2 torchvision==0.16.1 --index-url https://download.pytorch.org/whl/cu121
+RUN pip3 install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu121
 
 # Install Python packages for multi-LoRA inference with PyTorch 2.1.2 compatibility
 RUN pip3 install --no-cache-dir \
