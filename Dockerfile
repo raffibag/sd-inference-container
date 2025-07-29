@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
+# Pin exact PyTorch versions for consistency
+RUN pip3 install --no-cache-dir torch==2.1.2 torchvision==0.16.1 --index-url https://download.pytorch.org/whl/cu121
+
 # Install Python packages for multi-LoRA inference with PyTorch 2.1.2 compatibility
 RUN pip3 install --no-cache-dir \
     diffusers \
@@ -19,7 +22,7 @@ RUN pip3 install --no-cache-dir \
     accelerate \
     peft \
     safetensors \
-    opencv-python \
+    opencv-python-headless \
     Pillow \
     numpy \
     flask \
