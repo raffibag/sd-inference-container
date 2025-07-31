@@ -1,0 +1,22 @@
+# PyTorch with CUDA 11.8 to match training container
+torch==2.1.2
+torchvision==0.16.2
+
+# Core ML libraries
+diffusers
+transformers
+accelerate
+peft
+safetensors
+
+# Image processing
+Pillow
+
+# Web framework
+flask
+
+# AWS integration
+boto3
+
+# Memory efficient attention (installed separately due to CUDA dependency)
+# xformers (installed via separate pip command with CUDA 11.8 index)

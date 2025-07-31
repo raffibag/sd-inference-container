@@ -334,16 +334,35 @@ def invocations():
         logger.error(f"Generation failed: {e}")
         return jsonify({"error": str(e)}), 500
 
+def get_default_model_bucket():
+    """Generate dynamic bucket name based on AWS account and region"""
+    try:
+        # Get AWS account ID and region from boto3
+        sts_client = boto3.client('sts')
+        account_id = sts_client.get_caller_identity()['Account']
+        
+        session = boto3.Session()
+        region = session.region_name or 'us-west-2'
+        
+        # Get environment (defaults to prod)
+        env = os.environ.get('VIBEZ_ENV', 'prod')
+        env_suffix = '' if env == 'prod' else f'-{env}'
+        
+        return f'vibez-model-registry{env_suffix}-{account_id}-{region}'
+    except Exception as e:
+        # Fallback to current bucket if AWS calls fail
+        return 'vibez-model-registry-796245059390-us-west-2'
+
 def model_fn(model_dir):
     """Load model for SageMaker"""
     global composer
-    model_bucket = os.environ.get('MODEL_BUCKET', 'fantasy-creatures-models')
+    model_bucket = os.environ.get('MODEL_BUCKET', get_default_model_bucket())
     composer = MultiLoRAComposer(model_bucket)
     return composer
 
 if __name__ == '__main__':
     # Initialize for local testing
-    model_bucket = os.environ.get('MODEL_BUCKET', 'fantasy-creatures-models') 
+    model_bucket = os.environ.get('MODEL_BUCKET', get_default_model_bucket())
     composer = MultiLoRAComposer(model_bucket)
     
     # Start Flask app
