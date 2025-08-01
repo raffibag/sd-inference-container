@@ -77,12 +77,7 @@ def initialize_pipeline():
     
     try:
         from diffusers import StableDiffusionXLPipeline, StableDiffusionXLControlNetPipeline, ControlNetModel
-        from controlnet_aux import (
-            CannyDetector, 
-            MidasDetector,
-            LineartDetector
-        )
-        from controlnet_aux.open_pose import OpenposeDetector
+        from register_controlnets import register_controlnets
         import torch
         
         logger.info("🚀 Initializing SDXL pipelines...")
@@ -106,46 +101,45 @@ def initialize_pipeline():
             variant="fp16" if dtype == torch.float16 else None
         )
         
-        # 2. Load ControlNet models
-        logger.info("📦 Loading ControlNet models...")
+        # 2. Load base ControlNet pipeline  
+        logger.info("📦 Loading base ControlNet pipeline...")
         
         # Get HuggingFace token from environment
         hf_token = os.environ.get('HUGGINGFACE_HUB_TOKEN')
         if hf_token:
             logger.info("🔑 Using HuggingFace token for model downloads")
         
-        # For now, use SDXL Canny for all control types to avoid missing model issues
-        controlnet_canny = ControlNetModel.from_pretrained(
+        # Create initial ControlNet pipeline with canny (will be extended)
+        initial_controlnet = ControlNetModel.from_pretrained(
             "diffusers/controlnet-canny-sdxl-1.0-small", 
             torch_dtype=dtype,
             use_auth_token=hf_token
         )
         
-        # Use the same model for all types temporarily
-        controlnet_openpose = controlnet_canny
-        controlnet_depth = controlnet_canny
-        
-        logger.info("⚠️  Using Canny ControlNet for all control types temporarily")
-        
-        # Store ControlNets in a dict for easy access
-        controlnets = {
-            'openpose': controlnet_openpose,
-            'canny': controlnet_canny,
-            'depth': controlnet_depth
-        }
-        
-        # 3. Load ControlNet pipeline
-        logger.info("📦 Loading ControlNet pipeline...")
         controlnet_pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
             model_id,
-            controlnet=controlnet_openpose,  # Default to openpose
+            controlnet=initial_controlnet,
             torch_dtype=dtype,
             use_safetensors=True,
             variant="fp16" if dtype == torch.float16 else None
         )
         
-        # Store controlnets for swapping
-        controlnet_pipe.controlnets = controlnets
+        # 3. Register all ControlNets using the new system
+        logger.info("📦 Registering ControlNet models and processors...")
+        controlnet_config = {
+            "canny": "diffusers/controlnet-canny-sdxl-1.0-small",
+            "depth": "diffusers/controlnet-depth-sdxl-1.0-small",
+            "openpose": "diffusers/controlnet-openpose-sdxl-1.0"
+        }
+        
+        # Register all ControlNets and processors
+        controlnets, controlnet_processors = register_controlnets(controlnet_pipe, controlnet_config)
+        
+        # Make controlnet_processors available globally
+        globals()['controlnet_processors'] = controlnet_processors
+        
+        # Set default ControlNet
+        controlnet_pipe.controlnet = controlnets["canny"]
         
         # Move both pipelines to device
         pipe = pipe.to(device)
@@ -167,19 +161,6 @@ def initialize_pipeline():
         else:
             logger.info("🖥️  Running on CPU - xformers disabled")
         
-        # Initialize ControlNet processors
-        logger.info("🔧 Initializing ControlNet processors...")
-        try:
-            controlnet_processors = {
-                'openpose': OpenposeDetector.from_pretrained("lllyasviel/ControlNet"),
-                'canny': CannyDetector(),
-                'depth': MidasDetector.from_pretrained('lllyasviel/midas'),
-                'lineart': LineartDetector.from_pretrained('lllyasviel/lineart')
-            }
-            logger.info("✅ Initialized all ControlNet processors successfully")
-        except Exception as e:
-            logger.error(f"Error initializing processors: {e}")
-            controlnet_processors = {}
         
         logger.info(f"✅ Pipeline initialized on {device} with ControlNet support")
         logger.info(f"🎛️  Available ControlNets: {list(controlnets.keys())}")
@@ -414,8 +395,16 @@ def invocations():
         
         # Process control image if provided
         control_image = None
-        if control_image_data and control_type in controlnet_pipe.controlnets:
-            control_image = process_control_image(control_image_data, control_type)
+        if control_image_data:
+            logger.warning(f"💥 control_type = {control_type}")
+            logger.warning(f"✅ controlnet_pipe.controlnets = {controlnet_pipe.controlnets.keys()}")
+            logger.warning(f"✅ controlnet_processors = {controlnet_processors.keys()}")
+            
+            if control_type in controlnet_pipe.controlnets and control_type in controlnet_processors:
+                control_image = process_control_image(control_image_data, control_type)
+            else:
+                logger.error(f"❌ Control type '{control_type}' not available")
+                control_image = None
             if control_image:
                 # Swap ControlNet if needed
                 if controlnet_pipe.controlnet != controlnet_pipe.controlnets[control_type]:
