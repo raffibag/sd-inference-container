@@ -80,7 +80,7 @@ def initialize_pipeline():
             logger.info("🔑 Using HuggingFace token for model downloads")
         
         controlnet_openpose = ControlNetModel.from_pretrained(
-            "thibaud/controlnet-openpose-sdxl-1.0",
+            "lllyasviel/control_v11p_sd15_openpose",
             torch_dtype=torch.float16,
             use_auth_token=hf_token
         )
@@ -129,7 +129,7 @@ def initialize_pipeline():
         # Initialize ControlNet processors
         logger.info("🔧 Initializing ControlNet processors...")
         controlnet_processors = {
-            'openpose': OpenposeDetector(),
+            'openpose': OpenposeDetector.from_pretrained("lllyasviel/control_v11p_sd15_openpose"),
             'canny': CannyDetector(),
             'depth': MidasDetector.from_pretrained('lllyasviel/midas'),
             'lineart': LineartDetector.from_pretrained('lllyasviel/lineart')
