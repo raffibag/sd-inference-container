@@ -20,6 +20,10 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118 \
     && pip3 cache purge
 
+# Install numpy first as it's a critical dependency
+RUN pip3 install --no-cache-dir numpy \
+    && pip3 cache purge
+
 # Install all other dependencies from requirements.txt (they will skip torch/torchvision as already satisfied)
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
     && pip3 cache purge

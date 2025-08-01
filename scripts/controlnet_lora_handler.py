@@ -7,9 +7,31 @@ Handles SDXL + multi-LoRA composition + ControlNet conditioning
 import os
 import json
 import logging
+import sys
+
+# Configure logging early
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Debug: Check Python environment and numpy availability
+logger.info(f"Python executable: {sys.executable}")
+logger.info(f"Python version: {sys.version}")
+
+try:
+    import numpy
+    logger.info(f"✅ NumPy version: {numpy.__version__}")
+except ImportError as e:
+    logger.error(f"❌ NumPy not found in runtime environment: {e}")
+    # Try to list installed packages
+    try:
+        import subprocess
+        result = subprocess.run([sys.executable, "-m", "pip", "list"], capture_output=True, text=True)
+        logger.info(f"Installed packages:\n{result.stdout}")
+    except Exception as ex:
+        logger.error(f"Could not list packages: {ex}")
+
 import flask
 import signal
-import sys
 import boto3
 import torch
 import base64
@@ -19,10 +41,6 @@ from io import BytesIO
 from PIL import Image
 from typing import Dict, List, Optional
 from pathlib import Path
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = flask.Flask(__name__)
