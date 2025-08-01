@@ -204,13 +204,14 @@ def download_lora_model(model_path: str, bucket: str) -> Optional[str]:
         cache_dir.mkdir(exist_ok=True)
         
         # Try different possible paths for the model
+        date_part = model_path.split('/')[-1].replace('auto-', '')  # Remove auto- prefix
         possible_paths = [
             f"models/{model_path}/model.safetensors",
             f"{model_path}/model.safetensors",
-            # Handle the tar.gz structure we found - with char-franka prefix and date
-            f"models/{model_path}/char-franka-{model_path.split('/')[-1]}/output/model.tar.gz",
-            f"models/{model_path}/char-{model_path.split('/')[-1]}/output/model.tar.gz",
-            f"models/{model_path}/{model_path.split('/')[-1]}/output/model.tar.gz"
+            # Handle the tar.gz structure we found - with char-franka prefix and date (without auto-)
+            f"models/{model_path}/char-franka-{date_part}/output/model.tar.gz",
+            f"models/{model_path}/char-{date_part}/output/model.tar.gz",
+            f"models/{model_path}/{date_part}/output/model.tar.gz"
         ]
         
         local_path = None
@@ -231,11 +232,21 @@ def download_lora_model(model_path: str, bucket: str) -> Optional[str]:
                     with tarfile.open(tar_path, 'r:gz') as tar:
                         tar.extractall(extract_dir)
                     
-                    # Find the safetensors file
-                    for file in extract_dir.rglob('*.safetensors'):
-                        local_path = file
-                        logger.info(f"✅ Found LoRA model: {file.name}")
-                        break
+                    # Find the main safetensors file (look for the base model, not checkpoints)
+                    main_model_candidates = ['franka_lora.safetensors', 'model.safetensors', 'pytorch_lora_weights.safetensors']
+                    for candidate in main_model_candidates:
+                        candidate_path = extract_dir / candidate
+                        if candidate_path.exists():
+                            local_path = candidate_path
+                            logger.info(f"✅ Found main LoRA model: {candidate}")
+                            break
+                    
+                    # Fallback: use any safetensors file if main model not found
+                    if not local_path:
+                        for file in extract_dir.rglob('*.safetensors'):
+                            local_path = file
+                            logger.info(f"✅ Found LoRA model (fallback): {file.name}")
+                            break
                     
                     if local_path:
                         break
