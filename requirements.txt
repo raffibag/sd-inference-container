@@ -10,7 +10,7 @@ peft
 safetensors
 
 # ControlNet support
-controlnet-aux>=0.7.1,<0.8.0
+controlnet-aux==0.0.10
 opencv-python
 
 # Image processing
