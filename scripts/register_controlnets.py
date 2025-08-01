@@ -8,7 +8,7 @@ from controlnet_aux import (
     MidasDetector,
     MLSDdetector,
     HEDdetector,
-    ScribbleDetector
+    LineartDetector
 )
 
 logger = logging.getLogger(__name__)
@@ -44,8 +44,10 @@ def register_controlnets(pipe, controlnet_config):
         "depth": MidasDetector,
         "openpose": OpenposeDetector,
         "mlsd": MLSDdetector,
-        "scribble": ScribbleDetector,
         "hed": HEDdetector,
+        "lineart": LineartDetector,
+        # Note: ScribbleDetector not available in controlnet_aux
+        # Can use HED or PidiNet as alternatives for edge detection
     }
 
     for control_type, model_path in controlnet_config.items():
