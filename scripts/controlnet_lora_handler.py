@@ -192,15 +192,54 @@ def download_lora_model(model_path: str, bucket: str) -> Optional[str]:
         cache_dir = Path("/tmp/lora_cache")
         cache_dir.mkdir(exist_ok=True)
         
-        # Download from S3
-        local_path = cache_dir / model_path.replace('/', '_')
-        local_path = local_path.with_suffix('.safetensors')
+        # Try different possible paths for the model
+        possible_paths = [
+            f"models/{model_path}/model.safetensors",
+            f"{model_path}/model.safetensors",
+            # Handle the tar.gz structure we found
+            f"models/{model_path}/{model_path.split('/')[-1]}/output/model.tar.gz"
+        ]
         
-        logger.info(f"📦 Downloading LoRA from s3://{bucket}/{model_path}")
-        s3_client.download_file(bucket, f"{model_path}/model.safetensors", str(local_path))
+        local_path = None
+        for s3_path in possible_paths:
+            try:
+                local_file = cache_dir / f"{model_path.replace('/', '_')}_model"
+                if s3_path.endswith('.tar.gz'):
+                    # Download and extract tar.gz
+                    tar_path = local_file.with_suffix('.tar.gz')
+                    logger.info(f"📦 Trying to download LoRA from s3://{bucket}/{s3_path}")
+                    s3_client.download_file(bucket, s3_path, str(tar_path))
+                    
+                    # Extract the tar.gz to find the safetensors file
+                    import tarfile
+                    extract_dir = cache_dir / f"{model_path.replace('/', '_')}_extracted"
+                    extract_dir.mkdir(exist_ok=True)
+                    
+                    with tarfile.open(tar_path, 'r:gz') as tar:
+                        tar.extractall(extract_dir)
+                    
+                    # Find the safetensors file
+                    for file in extract_dir.rglob('*.safetensors'):
+                        local_path = file
+                        logger.info(f"✅ Found LoRA model: {file.name}")
+                        break
+                    
+                    if local_path:
+                        break
+                else:
+                    local_path = local_file.with_suffix('.safetensors')
+                    logger.info(f"📦 Trying to download LoRA from s3://{bucket}/{s3_path}")
+                    s3_client.download_file(bucket, s3_path, str(local_path))
+                    break
+            except Exception:
+                continue
         
-        lora_cache[cache_key] = str(local_path)
-        return str(local_path)
+        if local_path and local_path.exists():
+            lora_cache[cache_key] = str(local_path)
+            return str(local_path)
+        else:
+            logger.error(f"❌ Could not find LoRA model in any expected location")
+            return None
         
     except Exception as e:
         logger.error(f"❌ Failed to download LoRA: {str(e)}")
@@ -369,25 +408,8 @@ def invocations():
                 generator=generator
             ).images
         else:
-            # Generate without ControlNet (fallback to regular SDXL)
-            from diffusers import StableDiffusionXLPipeline
-            
-            # Create temporary regular pipeline
-            regular_pipe = StableDiffusionXLPipeline.from_pretrained(
-                "stabilityai/stable-diffusion-xl-base-1.0",
-                torch_dtype=torch.float16,
-                use_safetensors=True,
-                variant="fp16"
-            ).to(pipe.device)
-            
-            # Copy LoRA weights if they exist
-            if hasattr(pipe, '_lora_scale'):
-                regular_pipe.load_lora_weights = pipe.load_lora_weights
-                regular_pipe.set_adapters = pipe.set_adapters
-                if composition:
-                    apply_lora_composition(composition)
-            
-            images = regular_pipe(
+            # Generate without ControlNet using existing pipeline
+            images = pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 num_images_per_prompt=num_images,
@@ -395,7 +417,8 @@ def invocations():
                 guidance_scale=guidance_scale,
                 width=width,
                 height=height,
-                generator=generator
+                generator=generator,
+                image=None  # No control image
             ).images
         
         # Convert to base64
