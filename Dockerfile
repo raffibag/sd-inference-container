@@ -16,11 +16,11 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements file
 COPY requirements.txt /tmp/requirements.txt
 
-# Install PyTorch with CUDA 11.8 to match training container exactly
+# Install PyTorch first with CUDA 11.8 index
 RUN pip3 install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118 \
     && pip3 cache purge
 
-# Install remaining dependencies from requirements.txt
+# Install all other dependencies from requirements.txt (they will skip torch/torchvision as already satisfied)
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
     && pip3 cache purge
 
