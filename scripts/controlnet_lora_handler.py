@@ -129,7 +129,7 @@ def initialize_pipeline():
         # Initialize ControlNet processors
         logger.info("🔧 Initializing ControlNet processors...")
         controlnet_processors = {
-            'openpose': OpenposeDetector.from_pretrained('lllyasviel/openpose'),
+            'openpose': OpenposeDetector(),
             'canny': CannyDetector(),
             'depth': MidasDetector.from_pretrained('lllyasviel/midas'),
             'lineart': LineartDetector.from_pretrained('lllyasviel/lineart')
