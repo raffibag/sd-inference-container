@@ -74,17 +74,17 @@ def initialize_pipeline():
         # Load ControlNet models
         logger.info("📦 Loading ControlNet models...")
         controlnet_openpose = ControlNetModel.from_pretrained(
-            "diffusers/controlnet-openpose-sdxl-1.0",
+            "thibaud/controlnet-openpose-sdxl-1.0",
             torch_dtype=torch.float16
         )
         
         controlnet_canny = ControlNetModel.from_pretrained(
-            "diffusers/controlnet-canny-sdxl-1.0", 
+            "diffusers/controlnet-canny-sdxl-1.0-small", 
             torch_dtype=torch.float16
         )
         
         controlnet_depth = ControlNetModel.from_pretrained(
-            "diffusers/controlnet-depth-sdxl-1.0",
+            "diffusers/controlnet-depth-sdxl-1.0-small",
             torch_dtype=torch.float16
         )
         
