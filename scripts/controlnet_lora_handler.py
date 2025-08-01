@@ -207,7 +207,8 @@ def download_lora_model(model_path: str, bucket: str) -> Optional[str]:
         possible_paths = [
             f"models/{model_path}/model.safetensors",
             f"{model_path}/model.safetensors",
-            # Handle the tar.gz structure we found - with char- prefix
+            # Handle the tar.gz structure we found - with char-franka prefix and date
+            f"models/{model_path}/char-franka-{model_path.split('/')[-1]}/output/model.tar.gz",
             f"models/{model_path}/char-{model_path.split('/')[-1]}/output/model.tar.gz",
             f"models/{model_path}/{model_path.split('/')[-1]}/output/model.tar.gz"
         ]
