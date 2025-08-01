@@ -46,7 +46,8 @@ from pathlib import Path
 app = flask.Flask(__name__)
 
 # Global instances
-pipe = None
+pipe = None  # Regular SDXL pipeline
+controlnet_pipe = None  # ControlNet pipeline
 s3_client = None
 lora_cache = {}
 controlnet_processors = {}
@@ -71,11 +72,11 @@ def get_default_model_bucket():
         return 'vibez-model-registry-796245059390-us-west-2'
 
 def initialize_pipeline():
-    """Initialize the Stable Diffusion XL pipeline with ControlNet support"""
-    global pipe, s3_client, controlnet_processors
+    """Initialize both regular SDXL and ControlNet pipelines"""
+    global pipe, controlnet_pipe, s3_client, controlnet_processors
     
     try:
-        from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel
+        from diffusers import StableDiffusionXLPipeline, StableDiffusionXLControlNetPipeline, ControlNetModel
         from controlnet_aux import (
             CannyDetector, 
             MidasDetector,
@@ -84,7 +85,7 @@ def initialize_pipeline():
         from controlnet_aux.open_pose import OpenposeDetector
         import torch
         
-        logger.info("🚀 Initializing SDXL + ControlNet pipeline...")
+        logger.info("🚀 Initializing SDXL pipelines...")
         
         # Initialize S3 client
         s3_client = boto3.client('s3')
@@ -94,7 +95,18 @@ def initialize_pipeline():
         dtype = torch.float16 if device == "cuda" else torch.float32
         logger.info(f"🖥️  Device: {device}, dtype: {dtype}")
         
-        # Load ControlNet models
+        model_id = "stabilityai/stable-diffusion-xl-base-1.0"
+        
+        # 1. Load regular SDXL pipeline (for non-ControlNet generation)
+        logger.info("📦 Loading regular SDXL pipeline...")
+        pipe = StableDiffusionXLPipeline.from_pretrained(
+            model_id,
+            torch_dtype=dtype,
+            use_safetensors=True,
+            variant="fp16" if dtype == torch.float16 else None
+        )
+        
+        # 2. Load ControlNet models
         logger.info("📦 Loading ControlNet models...")
         
         # Get HuggingFace token from environment
@@ -122,10 +134,9 @@ def initialize_pipeline():
             'depth': controlnet_depth
         }
         
-        # Load base SDXL model with first ControlNet (we'll swap as needed)
-        model_id = "stabilityai/stable-diffusion-xl-base-1.0"
-        
-        pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
+        # 3. Load ControlNet pipeline
+        logger.info("📦 Loading ControlNet pipeline...")
+        controlnet_pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
             model_id,
             controlnet=controlnet_openpose,  # Default to openpose
             torch_dtype=dtype,
@@ -134,26 +145,26 @@ def initialize_pipeline():
         )
         
         # Store controlnets for swapping
-        pipe.controlnets = controlnets
+        controlnet_pipe.controlnets = controlnets
         
-        # Move to GPU if available
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"🖥️  Using device: {device}")
+        # Move both pipelines to device
+        pipe = pipe.to(device)
+        controlnet_pipe = controlnet_pipe.to(device)
+        
         logger.info(f"🎮 CUDA available: {torch.cuda.is_available()}")
         if torch.cuda.is_available():
             logger.info(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}")
         
-        pipe = pipe.to(device)
-        
         # Enable memory efficient attention only if on GPU
-        if device == "cuda" and hasattr(pipe, 'enable_xformers_memory_efficient_attention'):
-            try:
-                pipe.enable_xformers_memory_efficient_attention()
-                logger.info("✅ Enabled xformers memory efficient attention")
-            except Exception as e:
-                logger.warning(f"⚠️  Could not enable xformers: {str(e)}")
-                # Continue without xformers
-        elif device == "cpu":
+        if device == "cuda":
+            for p in [pipe, controlnet_pipe]:
+                if hasattr(p, 'enable_xformers_memory_efficient_attention'):
+                    try:
+                        p.enable_xformers_memory_efficient_attention()
+                        logger.info(f"✅ Enabled xformers for {p.__class__.__name__}")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Could not enable xformers: {str(e)}")
+        else:
             logger.info("🖥️  Running on CPU - xformers disabled")
         
         # Initialize ControlNet processors
@@ -196,7 +207,8 @@ def download_lora_model(model_path: str, bucket: str) -> Optional[str]:
         possible_paths = [
             f"models/{model_path}/model.safetensors",
             f"{model_path}/model.safetensors",
-            # Handle the tar.gz structure we found
+            # Handle the tar.gz structure we found - with char- prefix
+            f"models/{model_path}/char-{model_path.split('/')[-1]}/output/model.tar.gz",
             f"models/{model_path}/{model_path.split('/')[-1]}/output/model.tar.gz"
         ]
         
@@ -273,52 +285,60 @@ def process_control_image(image_data: str, control_type: str) -> Optional[Image.
         logger.error(f"❌ Failed to process control image: {str(e)}")
         return None
 
-def apply_lora_composition(composition: Dict):
-    """Apply LoRA composition to the pipeline"""
-    global pipe
+def apply_lora_composition(composition: Dict, pipeline=None):
+    """Apply LoRA composition to the specified pipeline (or both if None)"""
+    global pipe, controlnet_pipe
     
     try:
         bucket = get_default_model_bucket()
         
-        # Reset adapters first
-        try:
-            pipe.unload_lora_weights()
-        except:
-            pass
+        # Determine which pipelines to apply LoRA to
+        pipelines = []
+        if pipeline:
+            pipelines = [pipeline]
+        else:
+            pipelines = [pipe, controlnet_pipe]
         
-        adapters = []
-        weights = []
-        
-        # Load character LoRA if specified
-        if 'character' in composition:
-            char_config = composition['character']
-            model_path = char_config['model_path']
-            weight = char_config.get('weight', 1.0)
+        for p in pipelines:
+            # Reset adapters first
+            try:
+                p.unload_lora_weights()
+            except:
+                pass
             
-            lora_path = download_lora_model(model_path, bucket)
-            if lora_path:
-                logger.info(f"🎭 Loading character LoRA with weight {weight}")
-                pipe.load_lora_weights(lora_path, adapter_name="character")
-                adapters.append("character")
-                weights.append(weight)
-        
-        # Load style LoRA if specified
-        if 'style' in composition:
-            style_config = composition['style']
-            model_path = style_config['model_path']
-            weight = style_config.get('weight', 0.7)
+            adapters = []
+            weights = []
             
-            lora_path = download_lora_model(model_path, bucket)
-            if lora_path:
-                logger.info(f"🎨 Loading style LoRA with weight {weight}")
-                pipe.load_lora_weights(lora_path, adapter_name="style")
-                adapters.append("style")
-                weights.append(weight)
-        
-        # Apply adapters if any were loaded
-        if adapters:
-            pipe.set_adapters(adapters, adapter_weights=weights)
-            logger.info(f"✅ Applied LoRA composition: {adapters} with weights {weights}")
+            # Load character LoRA if specified
+            if 'character' in composition:
+                char_config = composition['character']
+                model_path = char_config['model_path']
+                weight = char_config.get('weight', 1.0)
+                
+                lora_path = download_lora_model(model_path, bucket)
+                if lora_path:
+                    logger.info(f"🎭 Loading character LoRA with weight {weight} to {p.__class__.__name__}")
+                    p.load_lora_weights(lora_path, adapter_name="character")
+                    adapters.append("character")
+                    weights.append(weight)
+            
+            # Load style LoRA if specified
+            if 'style' in composition:
+                style_config = composition['style']
+                model_path = style_config['model_path']
+                weight = style_config.get('weight', 0.7)
+                
+                lora_path = download_lora_model(model_path, bucket)
+                if lora_path:
+                    logger.info(f"🎨 Loading style LoRA with weight {weight} to {p.__class__.__name__}")
+                    p.load_lora_weights(lora_path, adapter_name="style")
+                    adapters.append("style")
+                    weights.append(weight)
+            
+            # Apply adapters if any were loaded
+            if adapters:
+                p.set_adapters(adapters, adapter_weights=weights)
+                logger.info(f"✅ Applied LoRA composition to {p.__class__.__name__}: {adapters} with weights {weights}")
         
         return True
         
@@ -329,8 +349,8 @@ def apply_lora_composition(composition: Dict):
 @app.route('/ping', methods=['GET'])
 def ping():
     """SageMaker health check endpoint"""
-    if pipe is None:
-        return flask.Response(status=503, response="Pipeline not loaded")
+    if pipe is None or controlnet_pipe is None:
+        return flask.Response(status=503, response="Pipelines not loaded")
     
     return flask.Response(status=200, response="OK")
 
@@ -382,20 +402,20 @@ def invocations():
         
         # Process control image if provided
         control_image = None
-        if control_image_data and control_type in pipe.controlnets:
+        if control_image_data and control_type in controlnet_pipe.controlnets:
             control_image = process_control_image(control_image_data, control_type)
             if control_image:
                 # Swap ControlNet if needed
-                if pipe.controlnet != pipe.controlnets[control_type]:
-                    pipe.controlnet = pipe.controlnets[control_type]
+                if controlnet_pipe.controlnet != controlnet_pipe.controlnets[control_type]:
+                    controlnet_pipe.controlnet = controlnet_pipe.controlnets[control_type]
                 logger.info(f"✅ Using {control_type} ControlNet with conditioning scale {controlnet_conditioning_scale}")
         
-        # Generate images
-        generator = torch.Generator(device=pipe.device).manual_seed(seed) if seed else None
-        
+        # Choose the appropriate pipeline and generate images
         if control_image:
-            # Generate with ControlNet
-            images = pipe(
+            # Use ControlNet pipeline
+            logger.info("🎨 Using ControlNet pipeline")
+            generator = torch.Generator(device=controlnet_pipe.device).manual_seed(seed) if seed else None
+            images = controlnet_pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 image=control_image,
@@ -408,7 +428,9 @@ def invocations():
                 generator=generator
             ).images
         else:
-            # Generate without ControlNet using existing pipeline
+            # Use regular SDXL pipeline
+            logger.info("🎨 Using regular SDXL pipeline")
+            generator = torch.Generator(device=pipe.device).manual_seed(seed) if seed else None
             images = pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -417,8 +439,7 @@ def invocations():
                 guidance_scale=guidance_scale,
                 width=width,
                 height=height,
-                generator=generator,
-                image=None  # No control image
+                generator=generator
             ).images
         
         # Convert to base64
