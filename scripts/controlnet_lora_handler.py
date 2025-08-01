@@ -73,19 +73,28 @@ def initialize_pipeline():
         
         # Load ControlNet models
         logger.info("📦 Loading ControlNet models...")
+        
+        # Get HuggingFace token from environment
+        hf_token = os.environ.get('HUGGINGFACE_HUB_TOKEN')
+        if hf_token:
+            logger.info("🔑 Using HuggingFace token for model downloads")
+        
         controlnet_openpose = ControlNetModel.from_pretrained(
             "thibaud/controlnet-openpose-sdxl-1.0",
-            torch_dtype=torch.float16
+            torch_dtype=torch.float16,
+            use_auth_token=hf_token
         )
         
         controlnet_canny = ControlNetModel.from_pretrained(
             "diffusers/controlnet-canny-sdxl-1.0-small", 
-            torch_dtype=torch.float16
+            torch_dtype=torch.float16,
+            use_auth_token=hf_token
         )
         
         controlnet_depth = ControlNetModel.from_pretrained(
             "diffusers/controlnet-depth-sdxl-1.0-small",
-            torch_dtype=torch.float16
+            torch_dtype=torch.float16,
+            use_auth_token=hf_token
         )
         
         # Store ControlNets in a dict for easy access

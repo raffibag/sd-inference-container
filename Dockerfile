@@ -44,6 +44,7 @@ WORKDIR /opt/ml/code
 
 # SageMaker configuration
 ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
+# HuggingFace token will be passed as environment variable during deployment
 RUN mkdir -p /opt/ml/model
 
 EXPOSE 8080
