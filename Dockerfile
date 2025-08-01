@@ -20,22 +20,12 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118 \
     && pip3 cache purge
 
-# Install remaining dependencies from requirements.txt (excluding torch/torchvision)
-RUN pip3 install --no-cache-dir \
-    diffusers \
-    transformers \
-    accelerate \
-    peft \
-    safetensors \
-    controlnet-aux>=0.4.0 \
-    opencv-python \
-    Pillow \
-    flask \
-    boto3 \
+# Install remaining dependencies from requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
     && pip3 cache purge
 
-# Install xformers with CUDA 11.8 to match training container
-RUN pip3 install --no-cache-dir xformers --index-url https://download.pytorch.org/whl/cu118 \
+# Install xformers with specific version for CUDA 11.8
+RUN pip3 install --no-cache-dir xformers==0.0.23.post1 --index-url https://download.pytorch.org/whl/cu118 \
     && pip3 cache purge
 
 # Copy inference scripts
