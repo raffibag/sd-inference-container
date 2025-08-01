@@ -138,11 +138,23 @@ def initialize_pipeline():
         
         # Move to GPU if available
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"🖥️  Using device: {device}")
+        logger.info(f"🎮 CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logger.info(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}")
+        
         pipe = pipe.to(device)
         
-        # Enable memory efficient attention
-        if hasattr(pipe, 'enable_xformers_memory_efficient_attention'):
-            pipe.enable_xformers_memory_efficient_attention()
+        # Enable memory efficient attention only if on GPU
+        if device == "cuda" and hasattr(pipe, 'enable_xformers_memory_efficient_attention'):
+            try:
+                pipe.enable_xformers_memory_efficient_attention()
+                logger.info("✅ Enabled xformers memory efficient attention")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not enable xformers: {str(e)}")
+                # Continue without xformers
+        elif device == "cpu":
+            logger.info("🖥️  Running on CPU - xformers disabled")
         
         # Initialize ControlNet processors
         logger.info("🔧 Initializing ControlNet processors...")
