@@ -27,6 +27,8 @@ RUN pip3 install --no-cache-dir \
     accelerate \
     peft \
     safetensors \
+    controlnet-aux>=0.4.0 \
+    opencv-python \
     Pillow \
     flask \
     boto3 \
@@ -41,8 +43,8 @@ COPY scripts/ /opt/ml/code/
 WORKDIR /opt/ml/code
 
 # SageMaker configuration
-ENV SAGEMAKER_PROGRAM=lora_handler.py
+ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
 RUN mkdir -p /opt/ml/model
 
 EXPOSE 8080
-ENTRYPOINT ["python", "lora_handler.py"]
+ENTRYPOINT ["python", "controlnet_lora_handler.py"]

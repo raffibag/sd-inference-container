@@ -9,6 +9,10 @@ accelerate
 peft
 safetensors
 
+# ControlNet support
+controlnet-aux>=0.4.0
+opencv-python
+
 # Image processing
 Pillow
 
