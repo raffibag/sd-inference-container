@@ -1,12 +1,26 @@
-# Use AWS official PyTorch inference container with older versions compatible with SageMaker drivers
-# PyTorch 2.1.2 + CUDA 11.8 + driver 11040 compatibility
-FROM 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-inference:2.1.2-gpu-py310-cu118-ubuntu20.04-sagemaker
+# Use PyTorch base image with CUDA 12.1 (same as training container)
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-devel
 
-# Install exact versions compatible with SageMaker driver 11040
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    build-essential \
+    libjpeg-dev \
+    libpng-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip and install wheel
+RUN python -m pip install --upgrade pip setuptools wheel
+
+# Force reinstall PyTorch with proper CUDA 12.1 support
+RUN pip install --force-reinstall --no-cache-dir torch==2.1.2 torchvision==0.16.2 \
+    --extra-index-url https://download.pytorch.org/whl/cu121
+
+# Install xformers with CUDA 12.1 support
+RUN pip install xformers --extra-index-url https://download.pytorch.org/whl/cu121
+
+# Install Python dependencies
 RUN pip install --no-cache-dir \
-    torch==2.1.2 \
-    torchvision==0.16.2 \
-    xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu118 \
     diffusers==0.27.2 \
     transformers==4.40.2 \
     accelerate==0.27.2 \
@@ -27,7 +41,8 @@ ENV HF_HOME=/opt/ml/cache/huggingface
 COPY scripts/ /opt/ml/code/
 WORKDIR /opt/ml/code
 
-# SageMaker configuration - use our custom ControlNet + LoRA handler
+# Set environment variables (same as training container)
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
 
 # Create cache directory
