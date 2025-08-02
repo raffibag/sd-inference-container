@@ -12,26 +12,26 @@ RUN apt-get update && apt-get install -y \
 # Upgrade pip and install wheel
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Force reinstall PyTorch with proper CUDA 12.1 support
-RUN pip install --force-reinstall --no-cache-dir torch==2.1.2 torchvision==0.16.2 \
-    --extra-index-url https://download.pytorch.org/whl/cu121
-
-# Install xformers with CUDA 12.1 support
-RUN pip install xformers --extra-index-url https://download.pytorch.org/whl/cu121
-
-# Install Python dependencies
+# Install Python dependencies first
 RUN pip install --no-cache-dir \
     diffusers==0.27.2 \
     transformers==4.40.2 \
     accelerate==0.27.2 \
     safetensors==0.4.2 \
-    controlnet-aux==0.0.12 \
+    controlnet-aux==0.0.10 \
     opencv-python \
     peft==0.10.0 \
     Pillow \
     numpy>=1.25.2 \
     flask \
     boto3
+
+# Force reinstall PyTorch with proper CUDA 12.1 support (after other deps to avoid conflicts)
+RUN pip install --force-reinstall --no-cache-dir torch==2.1.2 torchvision==0.16.2 \
+    --extra-index-url https://download.pytorch.org/whl/cu121
+
+# Install xformers with CUDA 12.1 support (compatible with PyTorch 2.1.2)
+RUN pip install xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu121
 
 # Set HuggingFace cache to avoid stalls
 ENV TRANSFORMERS_CACHE=/opt/ml/cache/huggingface
