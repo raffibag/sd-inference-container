@@ -102,6 +102,11 @@ def initialize_pipeline():
         
         model_id = "stabilityai/stable-diffusion-xl-base-1.0"
         
+        # Get HuggingFace token from environment
+        hf_token = os.environ.get('HUGGINGFACE_HUB_TOKEN')
+        if hf_token:
+            logger.info("🔑 Using HuggingFace token for model downloads")
+        
         # 1. Load regular SDXL pipeline (for non-ControlNet generation)
         logger.info("📦 Loading regular SDXL pipeline...")
         pipe = StableDiffusionXLPipeline.from_pretrained(
@@ -118,11 +123,6 @@ def initialize_pipeline():
         
         # 2. Load base ControlNet pipeline  
         logger.info("📦 Loading base ControlNet pipeline...")
-        
-        # Get HuggingFace token from environment
-        hf_token = os.environ.get('HUGGINGFACE_HUB_TOKEN')
-        if hf_token:
-            logger.info("🔑 Using HuggingFace token for model downloads")
         
         # Create initial ControlNet pipeline with canny (will be extended)
         initial_controlnet = ControlNetModel.from_pretrained(
