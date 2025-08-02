@@ -1,6 +1,10 @@
 # Start with PyTorch base image that includes CUDA 11.8
 FROM pytorch/pytorch:2.1.2-cuda11.8-cudnn8-devel
 
+# Set timezone to avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
 # System dependencies
 RUN apt-get update && apt-get install -y \
     wget \
