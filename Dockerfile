@@ -51,5 +51,5 @@ ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
 # Create cache directory
 RUN mkdir -p /opt/ml/cache/huggingface
 
-# SageMaker expects 'serve' command - keep default entrypoint
-# CMD will be overridden by SageMaker with 'serve'
+# Remove direct entrypoint to let SageMaker handle it properly
+ENTRYPOINT []
