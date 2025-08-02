@@ -40,12 +40,12 @@ def register_controlnets(pipe, controlnet_config):
     hf_token = os.environ.get('HUGGINGFACE_HUB_TOKEN')
 
     processor_map = {
-        "canny": CannyDetector,
-        "depth": MidasDetector,
-        "openpose": OpenposeDetector,
-        "mlsd": MLSDdetector,
-        "hed": HEDdetector,
-        "lineart": LineartDetector,
+        "canny": lambda: CannyDetector(),
+        "depth": lambda: MidasDetector.from_pretrained("lllyasviel/Annotators"),
+        "openpose": lambda: OpenposeDetector.from_pretrained("lllyasviel/Annotators"),
+        "mlsd": lambda: MLSDdetector(),
+        "hed": lambda: HEDdetector(),
+        "lineart": lambda: LineartDetector.from_pretrained("lllyasviel/lineart"),
         # Note: ScribbleDetector not available in controlnet_aux
         # Can use HED or PidiNet as alternatives for edge detection
     }

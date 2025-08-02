@@ -128,8 +128,8 @@ def initialize_pipeline():
         logger.info("📦 Registering ControlNet models and processors...")
         controlnet_config = {
             "canny": "diffusers/controlnet-canny-sdxl-1.0-small",
-            "depth": "diffusers/controlnet-depth-sdxl-1.0-small",
-            "openpose": "diffusers/controlnet-openpose-sdxl-1.0"
+            "depth": "diffusers/controlnet-depth-sdxl-1.0",
+            "openpose": "thibaud/controlnet-openpose-sdxl-1.0"
         }
         
         # Register all ControlNets and processors
@@ -296,8 +296,13 @@ def apply_lora_composition(composition: Dict, pipeline=None):
             # Reset adapters first
             try:
                 p.unload_lora_weights()
-            except:
-                pass
+                # Clear any existing adapter names
+                if hasattr(p, '_adapter_weights'):
+                    p._adapter_weights.clear()
+                if hasattr(p, 'peft_config') and p.peft_config:
+                    p.peft_config.clear()
+            except Exception as e:
+                logger.warning(f"⚠️ Could not fully unload LoRA weights: {e}")
             
             adapters = []
             weights = []
