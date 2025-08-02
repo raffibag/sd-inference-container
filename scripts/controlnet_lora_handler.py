@@ -188,13 +188,9 @@ def initialize_pipeline():
                     except Exception as e:
                         logger.warning(f"⚠️  Could not enable attention slicing: {str(e)}")
                 
-                # Enable model CPU offload for large models
-                if hasattr(p, 'enable_model_cpu_offload'):
-                    try:
-                        p.enable_model_cpu_offload()
-                        logger.info(f"✅ Enabled CPU offload for {p.__class__.__name__}")
-                    except Exception as e:
-                        logger.warning(f"⚠️  Could not enable CPU offload: {str(e)}")
+                # Note: Skipping CPU offload to avoid float16 on CPU issues
+                # CPU offload can cause "addmm_impl_cpu_" not implemented for 'Half' errors
+                logger.info(f"✅ Keeping {p.__class__.__name__} on GPU (no CPU offload)")
         else:
             logger.info("🖥️  Running on CPU - memory optimizations disabled")
         
