@@ -41,9 +41,13 @@ ENV HF_HOME=/opt/ml/cache/huggingface
 COPY scripts/ /opt/ml/code/
 WORKDIR /opt/ml/code
 
-# Set environment variables (same as training container)
+# Set environment variables
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
 
 # Create cache directory
 RUN mkdir -p /opt/ml/cache/huggingface
+
+# Override entrypoint for SageMaker compatibility
+ENTRYPOINT []
+CMD ["python", "/opt/ml/code/controlnet_lora_handler.py"]
