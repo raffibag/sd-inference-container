@@ -9,6 +9,7 @@ ENV TZ=UTC
 RUN apt-get update && apt-get install -y \
     wget \
     git \
+    curl \
     build-essential \
     libjpeg-dev \
     libpng-dev \
@@ -70,3 +71,8 @@ ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
 
 # Let SageMaker handle entrypoint
 ENTRYPOINT []
+CMD ["serve"]
+
+# Health check for better monitoring
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8080/ping || exit 1
