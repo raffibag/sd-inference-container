@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
+FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn8-runtime
 
 # Prevent timezone prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -20,20 +20,20 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements file
 COPY requirements.txt /tmp/requirements.txt
 
-# Install PyTorch first with CUDA 11.8 index
-RUN pip3 install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118 \
+# Install PyTorch 2.4.0 with CUDA 12.1 (already included in base image, but ensure consistency)
+RUN pip3 install --no-cache-dir torch==2.4.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cu121 \
     && pip3 cache purge
 
-# Install numpy first as it's a critical dependency
-RUN pip3 install --no-cache-dir numpy \
+# Install numpy first as it's a critical dependency (compatible with PyTorch 2.4.0)
+RUN pip3 install --no-cache-dir "numpy>=1.25.2" \
     && pip3 cache purge
 
 # Install all other dependencies from requirements.txt (they will skip torch/torchvision as already satisfied)
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
     && pip3 cache purge
 
-# Install xformers with specific version for CUDA 11.8
-RUN pip3 install --no-cache-dir xformers==0.0.23.post1 --index-url https://download.pytorch.org/whl/cu118 \
+# Install xformers with PyTorch 2.4.0 + CUDA 12.1 compatibility
+RUN pip3 install --no-cache-dir xformers>=0.0.26 --index-url https://download.pytorch.org/whl/cu121 \
     && pip3 cache purge
 
 # Copy inference scripts

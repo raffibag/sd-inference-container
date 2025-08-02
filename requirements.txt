@@ -1,21 +1,21 @@
-# PyTorch with CUDA 11.8 to match training container
-torch==2.1.2
-torchvision==0.16.2
+# PyTorch 2.4.0 with CUDA 12.1 (installed separately in Dockerfile)
+# torch==2.4.0
+# torchvision==0.17.0
 
-# Core ML libraries
-diffusers
-transformers
-accelerate
-peft
-safetensors
+# Core ML libraries - PyTorch 2.4.0 compatible versions
+diffusers>=0.27.0
+transformers>=4.35.0
+accelerate>=0.25.0
+peft>=0.7.0
+safetensors>=0.3.1
 
-# ControlNet support
-controlnet-aux==0.0.10
+# ControlNet support - PyTorch 2.4.0 compatible
+controlnet-aux>=0.0.12
 opencv-python
 
 # Image processing
 Pillow
-numpy==1.24.4
+numpy>=1.25.2
 
 # Web framework
 flask
