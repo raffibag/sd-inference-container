@@ -1,12 +1,12 @@
-# Use AWS official PyTorch inference container with CUDA 11.8 - confirmed compatible with ml.g5.2xlarge
-# Matches SageMaker host driver ~525.60 to fix GPU detection
-FROM 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-inference:2.4.0-gpu-py310-cu118-ubuntu20.04-sagemaker
+# Use AWS official PyTorch inference container with older versions compatible with SageMaker drivers
+# PyTorch 2.1.2 + CUDA 11.8 + driver 11040 compatibility
+FROM 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-inference:2.1.2-gpu-py310-cu118-ubuntu20.04-sagemaker
 
-# Install our ML dependencies with exact versions for CUDA 11.8 compatibility
+# Install exact versions compatible with SageMaker driver 11040
 RUN pip install --no-cache-dir \
-    torch==2.4.0 \
-    torchvision==0.17.0 \
-    xformers==0.0.27.post1 --extra-index-url https://download.pytorch.org/whl/cu118 \
+    torch==2.1.2 \
+    torchvision==0.16.2 \
+    xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu118 \
     diffusers==0.27.2 \
     transformers==4.40.2 \
     accelerate==0.27.2 \
@@ -14,7 +14,6 @@ RUN pip install --no-cache-dir \
     controlnet-aux==0.0.12 \
     opencv-python \
     peft==0.10.0 \
-    triton==2.0.0 \
     Pillow \
     numpy>=1.25.2 \
     flask \

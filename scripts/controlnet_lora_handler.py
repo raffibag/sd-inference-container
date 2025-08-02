@@ -165,9 +165,17 @@ def initialize_pipeline():
         pipe = pipe.to(device)
         controlnet_pipe = controlnet_pipe.to(device)
         
-        logger.info(f"🎮 CUDA available: {torch.cuda.is_available()}")
-        if torch.cuda.is_available():
-            logger.info(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}")
+        # Debug CUDA detection
+        cuda_available = torch.cuda.is_available()
+        logger.info(f"🎮 CUDA available: {cuda_available}")
+        print("CUDA available:", cuda_available)
+        
+        if cuda_available:
+            device_name = torch.cuda.get_device_name(0)
+            logger.info(f"🎮 CUDA device: {device_name}")
+            print("Device name:", device_name)
+        else:
+            print("No CUDA device detected")
         
         # Enable memory optimizations
         if device == "cuda":
