@@ -1,4 +1,6 @@
-FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn8-runtime
+# Use AWS official PyTorch inference container - guaranteed SageMaker GPU compatibility
+# This eliminates CUDA driver version mismatches on ml.g5.x instances
+FROM 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-inference:2.4.0-gpu-py311-cu124-ubuntu22.04-sagemaker
 
 # Prevent timezone prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -20,9 +22,7 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements file
 COPY requirements.txt /tmp/requirements.txt
 
-# Install PyTorch 2.4.0 with CUDA 12.1 (already included in base image, but ensure consistency)
-RUN pip3 install --no-cache-dir torch==2.4.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cu121 \
-    && pip3 cache purge
+# PyTorch 2.4.0 + CUDA 12.4 already included in AWS base image - no manual installation needed
 
 # Install numpy first as it's a critical dependency (compatible with PyTorch 2.4.0)
 RUN pip3 install --no-cache-dir "numpy>=1.25.2" \
@@ -32,8 +32,8 @@ RUN pip3 install --no-cache-dir "numpy>=1.25.2" \
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
     && pip3 cache purge
 
-# Install xformers with PyTorch 2.4.0 + CUDA 12.1 compatibility
-RUN pip3 install --no-cache-dir xformers>=0.0.26 --index-url https://download.pytorch.org/whl/cu121 \
+# Install xformers with PyTorch 2.4.0 + CUDA 12.4 compatibility (AWS SageMaker optimized)
+RUN pip3 install --no-cache-dir xformers>=0.0.26 --index-url https://download.pytorch.org/whl/cu124 \
     && pip3 cache purge
 
 # Copy inference scripts

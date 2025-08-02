@@ -1,4 +1,4 @@
-# PyTorch 2.4.0 with CUDA 12.1 (installed separately in Dockerfile)
+# PyTorch 2.4.0 with CUDA 12.4 (pre-installed in AWS SageMaker base image)
 # torch==2.4.0
 # torchvision==0.17.0
 
