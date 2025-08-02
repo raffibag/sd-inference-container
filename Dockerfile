@@ -21,17 +21,14 @@ RUN apt-get update && apt-get install -y \
 # Upgrade pip and setuptools
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# CRITICAL: Uninstall any existing NumPy and force install <2.0
-RUN pip uninstall -y numpy && pip install --no-cache-dir "numpy<2.0"
-
-# Core Python packages
+# Core Python packages (install WITHOUT numpy first)
 RUN pip install --no-cache-dir \
     torch==2.1.2 \
     torchvision==0.16.2 \
     xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu118
 
-# AI generation stack
-RUN pip install --no-cache-dir \
+# AI generation stack (install WITHOUT numpy)
+RUN pip install --no-cache-dir --no-deps \
     diffusers==0.27.2 \
     transformers==4.40.2 \
     accelerate==0.27.2 \
@@ -41,17 +38,21 @@ RUN pip install --no-cache-dir \
     safetensors==0.4.2 \
     einops==0.7.0 \
     triton==2.1.0 \
-    scipy \
     opencv-python-headless \
     Pillow \
     flask \
     boto3 \
     imageio[ffmpeg] \
-    moviepy
+    moviepy \
+    timm \
+    scipy
 
-# Additional dependencies for ControlNet processors
-RUN pip install --no-cache-dir \
-    timm
+# NOW force install NumPy 1.x after everything else
+RUN pip uninstall -y numpy || true
+RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
+
+# Verify NumPy version
+RUN python -c "import numpy; assert numpy.__version__.startswith('1.'), f'NumPy {numpy.__version__} is not 1.x'"
 
 # HuggingFace cache directories (avoid re-download)
 ENV HF_HOME=/opt/ml/cache/huggingface
