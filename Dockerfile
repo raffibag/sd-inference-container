@@ -4,6 +4,10 @@ FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
+# Set HuggingFace cache to avoid stalls
+ENV TRANSFORMERS_CACHE=/opt/ml/cache/huggingface
+ENV HF_HOME=/opt/ml/cache/huggingface
+
 # Install minimal system dependencies
 RUN apt-get update && apt-get install -y \
     git \
@@ -40,6 +44,7 @@ WORKDIR /opt/ml/code
 ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
 # HuggingFace token will be passed as environment variable during deployment
 RUN mkdir -p /opt/ml/model
+RUN mkdir -p /opt/ml/cache/huggingface
 
 EXPOSE 8080
 ENTRYPOINT ["python", "controlnet_lora_handler.py"]

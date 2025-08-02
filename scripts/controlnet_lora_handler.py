@@ -79,8 +79,18 @@ def initialize_pipeline():
         from diffusers import StableDiffusionXLPipeline, StableDiffusionXLControlNetPipeline, ControlNetModel
         from register_controlnets import register_controlnets
         import torch
+        import os
+        
+        # Set HuggingFace cache directory
+        os.environ["TRANSFORMERS_CACHE"] = "/opt/ml/cache/huggingface"
+        os.environ["HF_HOME"] = "/opt/ml/cache/huggingface"
         
         logger.info("🚀 Initializing SDXL pipelines...")
+        
+        # Clear GPU cache before loading
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.info("🧹 Cleared GPU cache")
         
         # Initialize S3 client
         s3_client = boto3.client('s3')
@@ -98,8 +108,13 @@ def initialize_pipeline():
             model_id,
             torch_dtype=dtype,
             use_safetensors=True,
-            variant="fp16" if dtype == torch.float16 else None
+            variant="fp16" if dtype == torch.float16 else None,
+            use_auth_token=hf_token if hf_token else None
         )
+        
+        # Disable safety checker to prevent freezing
+        pipe.safety_checker = None
+        pipe.requires_safety_checker = False
         
         # 2. Load base ControlNet pipeline  
         logger.info("📦 Loading base ControlNet pipeline...")
@@ -121,8 +136,13 @@ def initialize_pipeline():
             controlnet=initial_controlnet,
             torch_dtype=dtype,
             use_safetensors=True,
-            variant="fp16" if dtype == torch.float16 else None
+            variant="fp16" if dtype == torch.float16 else None,
+            use_auth_token=hf_token if hf_token else None
         )
+        
+        # Disable safety checker to prevent freezing
+        controlnet_pipe.safety_checker = None
+        controlnet_pipe.requires_safety_checker = False
         
         # 3. Register all ControlNets using the new system
         logger.info("📦 Registering ControlNet models and processors...")
@@ -149,17 +169,34 @@ def initialize_pipeline():
         if torch.cuda.is_available():
             logger.info(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}")
         
-        # Enable memory efficient attention only if on GPU
+        # Enable memory optimizations
         if device == "cuda":
             for p in [pipe, controlnet_pipe]:
+                # Enable xformers memory efficient attention
                 if hasattr(p, 'enable_xformers_memory_efficient_attention'):
                     try:
                         p.enable_xformers_memory_efficient_attention()
                         logger.info(f"✅ Enabled xformers for {p.__class__.__name__}")
                     except Exception as e:
                         logger.warning(f"⚠️  Could not enable xformers: {str(e)}")
+                
+                # Enable attention slicing for memory efficiency
+                if hasattr(p, 'enable_attention_slicing'):
+                    try:
+                        p.enable_attention_slicing()
+                        logger.info(f"✅ Enabled attention slicing for {p.__class__.__name__}")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Could not enable attention slicing: {str(e)}")
+                
+                # Enable model CPU offload for large models
+                if hasattr(p, 'enable_model_cpu_offload'):
+                    try:
+                        p.enable_model_cpu_offload()
+                        logger.info(f"✅ Enabled CPU offload for {p.__class__.__name__}")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Could not enable CPU offload: {str(e)}")
         else:
-            logger.info("🖥️  Running on CPU - xformers disabled")
+            logger.info("🖥️  Running on CPU - memory optimizations disabled")
         
         
         logger.info(f"✅ Pipeline initialized on {device} with ControlNet support")
@@ -283,6 +320,11 @@ def apply_lora_composition(composition: Dict, pipeline=None):
     global pipe, controlnet_pipe
     
     try:
+        # Clear GPU cache before loading LoRA
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.info("🧹 Cleared GPU cache before LoRA loading")
+        
         bucket = get_default_model_bucket()
         
         # Determine which pipelines to apply LoRA to

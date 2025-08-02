@@ -57,7 +57,9 @@ def register_controlnets(pipe, controlnet_config):
             controlnets[control_type] = ControlNetModel.from_pretrained(
                 model_path,
                 torch_dtype=dtype,
-                use_auth_token=hf_token
+                use_auth_token=hf_token,
+                revision="fp16" if dtype == torch.float16 else None,
+                variant="fp16" if dtype == torch.float16 else None
             ).to(device)
             logger.info(f"✅ Loaded ControlNet model '{control_type}'")
         except Exception as e:
