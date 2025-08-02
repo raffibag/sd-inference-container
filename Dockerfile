@@ -1,28 +1,32 @@
 # Use PyTorch base image with CUDA 12.1 (same as training container)
 FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-devel
 
-# Install system dependencies
+# Install system dependencies including OpenGL for cv2
 RUN apt-get update && apt-get install -y \
     wget \
     build-essential \
     libjpeg-dev \
     libpng-dev \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Upgrade pip and install wheel
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Install Python dependencies first
+# Force downgrade NumPy to fix PyTorch compatibility
+RUN pip install --force-reinstall "numpy<2.0" 
+
+# Install Python dependencies
 RUN pip install --no-cache-dir \
     diffusers==0.27.2 \
     transformers==4.40.2 \
     accelerate==0.27.2 \
     safetensors==0.4.2 \
     controlnet-aux==0.0.10 \
-    opencv-python \
+    opencv-python-headless \
     peft==0.10.0 \
     Pillow \
-    numpy>=1.25.2 \
     flask \
     boto3
 
