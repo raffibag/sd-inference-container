@@ -51,6 +51,17 @@ RUN pip install --no-cache-dir --no-deps \
 RUN pip uninstall -y numpy || true
 RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
 
+# Install dependencies that were missed due to --no-deps
+RUN pip install --no-cache-dir \
+    werkzeug \
+    regex \
+    tokenizers \
+    filelock \
+    requests \
+    tqdm \
+    pyyaml \
+    packaging
+
 # Verify NumPy version
 RUN python -c "import numpy; assert numpy.__version__.startswith('1.'), f'NumPy {numpy.__version__} is not 1.x'"
 
