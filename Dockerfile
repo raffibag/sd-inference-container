@@ -20,8 +20,8 @@ RUN apt-get update && apt-get install -y \
 # Upgrade pip and setuptools
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Pin NumPy to avoid compatibility issues
-RUN pip install --force-reinstall "numpy<2.0"
+# CRITICAL: Uninstall any existing NumPy and force install <2.0
+RUN pip uninstall -y numpy && pip install --no-cache-dir "numpy<2.0"
 
 # Core Python packages
 RUN pip install --no-cache-dir \
@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir \
     diffusers==0.27.2 \
     transformers==4.40.2 \
     accelerate==0.27.2 \
+    huggingface-hub==0.20.3 \
     controlnet-aux==0.0.10 \
     peft==0.10.0 \
     safetensors==0.4.2 \
