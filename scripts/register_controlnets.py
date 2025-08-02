@@ -54,12 +54,19 @@ def register_controlnets(pipe, controlnet_config):
         # Load ControlNet model
         try:
             logger.info(f"🔄 Loading ControlNet model for '{control_type}' from {model_path}")
+            # Don't use fp16 variant/revision on CPU or if not available
+            kwargs = {
+                "torch_dtype": dtype,
+                "use_auth_token": hf_token
+            }
+            # Only add variant/revision for fp16 if on GPU
+            if dtype == torch.float16:
+                kwargs["variant"] = "fp16"
+                # Note: revision="fp16" doesn't exist for most models
+            
             controlnets[control_type] = ControlNetModel.from_pretrained(
                 model_path,
-                torch_dtype=dtype,
-                use_auth_token=hf_token,
-                revision="fp16" if dtype == torch.float16 else None,
-                variant="fp16" if dtype == torch.float16 else None
+                **kwargs
             ).to(device)
             logger.info(f"✅ Loaded ControlNet model '{control_type}'")
         except Exception as e:

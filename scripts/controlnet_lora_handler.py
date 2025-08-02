@@ -158,8 +158,14 @@ def initialize_pipeline():
         # Make controlnet_processors available globally
         globals()['controlnet_processors'] = controlnet_processors
         
-        # Set default ControlNet
-        controlnet_pipe.controlnet = controlnets["canny"]
+        # Set default ControlNet if available
+        if controlnets and "canny" in controlnets:
+            controlnet_pipe.controlnet = controlnets["canny"]
+        elif controlnets:
+            # Use first available ControlNet
+            controlnet_pipe.controlnet = next(iter(controlnets.values()))
+        else:
+            logger.warning("⚠️ No ControlNets loaded, ControlNet features will be unavailable")
         
         # Move both pipelines to device
         pipe = pipe.to(device)
