@@ -1,5 +1,5 @@
-# Use PyTorch base image with CUDA 12.1 (same as training container)
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-devel
+# Use PyTorch base image with CUDA 11.8 (matching training container packages)
+FROM pytorch/pytorch:2.1.2-cuda11.8-cudnn8-devel
 
 # Install system dependencies including OpenGL for cv2
 RUN apt-get update && apt-get install -y \
@@ -30,12 +30,12 @@ RUN pip install --no-cache-dir \
     flask \
     boto3
 
-# Force reinstall PyTorch with proper CUDA 12.1 support (after other deps to avoid conflicts)
+# Force reinstall PyTorch with proper CUDA 11.8 support (after other deps to avoid conflicts)
 RUN pip install --force-reinstall --no-cache-dir torch==2.1.2 torchvision==0.16.2 \
-    --extra-index-url https://download.pytorch.org/whl/cu121
+    --extra-index-url https://download.pytorch.org/whl/cu118
 
-# Install xformers with CUDA 12.1 support (compatible with PyTorch 2.1.2)
-RUN pip install xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu121
+# Install xformers with CUDA 11.8 support (compatible with PyTorch 2.1.2)
+RUN pip install xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu118
 
 # Set HuggingFace cache to avoid stalls
 ENV TRANSFORMERS_CACHE=/opt/ml/cache/huggingface
