@@ -21,14 +21,14 @@ RUN apt-get update && apt-get install -y \
 # Upgrade pip and setuptools
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Core Python packages (install WITHOUT numpy first)
+# Core Python packages
 RUN pip install --no-cache-dir \
     torch==2.1.2 \
     torchvision==0.16.2 \
     xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu118
 
-# AI generation stack (install WITHOUT numpy)
-RUN pip install --no-cache-dir --no-deps \
+# AI generation stack - install normally with dependencies
+RUN pip install --no-cache-dir \
     diffusers==0.27.2 \
     transformers==4.40.2 \
     accelerate==0.27.2 \
@@ -47,20 +47,9 @@ RUN pip install --no-cache-dir --no-deps \
     timm \
     scipy
 
-# NOW force install NumPy 1.x after everything else
-RUN pip uninstall -y numpy || true
+# CRITICAL: Force downgrade NumPy to 1.x as the very last step
+# This ensures all dependencies are installed but we still get NumPy 1.x
 RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
-
-# Install dependencies that were missed due to --no-deps
-RUN pip install --no-cache-dir \
-    werkzeug \
-    regex \
-    tokenizers \
-    filelock \
-    requests \
-    tqdm \
-    pyyaml \
-    packaging
 
 # Verify NumPy version
 RUN python -c "import numpy; assert numpy.__version__.startswith('1.'), f'NumPy {numpy.__version__} is not 1.x'"
