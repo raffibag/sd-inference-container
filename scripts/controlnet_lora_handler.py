@@ -77,6 +77,14 @@ def initialize_pipeline():
     
     try:
         from diffusers import StableDiffusionXLPipeline, StableDiffusionXLControlNetPipeline, ControlNetModel
+        from diffusers import (
+            DPMSolverMultistepScheduler,
+            EulerDiscreteScheduler,
+            EulerAncestralDiscreteScheduler,
+            DDIMScheduler,
+            PNDMScheduler,
+            UniPCMultistepScheduler
+        )
         from register_controlnets import register_controlnets
         import torch
         import os
@@ -208,6 +216,27 @@ def initialize_pipeline():
         else:
             logger.info("🖥️  Running on CPU - memory optimizations disabled")
         
+        # Configure DPM++ 2M Karras as default scheduler
+        logger.info("🎛️  Setting up DPM++ 2M Karras scheduler...")
+        scheduler_config = {
+            "algorithm_type": "dpmsolver++",
+            "solver_order": 2,
+            "use_karras_sigmas": True,
+            "beta_start": 0.00085,
+            "beta_end": 0.012,
+            "beta_schedule": "scaled_linear",
+        }
+        
+        # Apply to both pipelines
+        pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+            pipe.scheduler.config,
+            **scheduler_config
+        )
+        controlnet_pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+            controlnet_pipe.scheduler.config,
+            **scheduler_config
+        )
+        logger.info("✅ DPM++ 2M Karras scheduler configured as default")
         
         logger.info(f"✅ Pipeline initialized on {device} with ControlNet support")
         logger.info(f"🎛️  Available ControlNets: {list(controlnets.keys())}")
@@ -442,9 +471,36 @@ def invocations():
         control_type = input_data.get('control_type', 'openpose')  # openpose, canny, depth
         controlnet_conditioning_scale = input_data.get('controlnet_conditioning_scale', 1.0)
         
+        # Scheduler parameter
+        scheduler = input_data.get('scheduler', 'dpmpp_2m_karras')  # default to DPM++ 2M Karras
+        
         logger.info(f"📝 Generating with prompt: {prompt}")
         logger.info(f"🎨 Composition: {json.dumps(composition)}")
         logger.info(f"🎛️  ControlNet: {control_type if control_image_data else 'None'}")
+        logger.info(f"🔧 Scheduler: {scheduler}")
+        
+        # Configure scheduler based on request
+        if scheduler != 'dpmpp_2m_karras':  # Only change if not default
+            scheduler_map = {
+                'dpmpp_2m_karras': lambda config: DPMSolverMultistepScheduler.from_config(
+                    config, algorithm_type="dpmsolver++", solver_order=2, use_karras_sigmas=True
+                ),
+                'dpmpp_2m': lambda config: DPMSolverMultistepScheduler.from_config(
+                    config, algorithm_type="dpmsolver++", solver_order=2, use_karras_sigmas=False
+                ),
+                'euler': lambda config: EulerDiscreteScheduler.from_config(config),
+                'euler_a': lambda config: EulerAncestralDiscreteScheduler.from_config(config),
+                'ddim': lambda config: DDIMScheduler.from_config(config),
+                'pndm': lambda config: PNDMScheduler.from_config(config),
+                'unipc': lambda config: UniPCMultistepScheduler.from_config(config),
+            }
+            
+            if scheduler in scheduler_map:
+                pipe.scheduler = scheduler_map[scheduler](pipe.scheduler.config)
+                controlnet_pipe.scheduler = scheduler_map[scheduler](controlnet_pipe.scheduler.config)
+                logger.info(f"✅ Switched to {scheduler} scheduler")
+            else:
+                logger.warning(f"⚠️  Unknown scheduler '{scheduler}', using default DPM++ 2M Karras")
         
         # Apply LoRA composition if specified
         if composition:
