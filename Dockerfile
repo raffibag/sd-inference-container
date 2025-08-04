@@ -1,31 +1,50 @@
-# Start with PyTorch base image that includes CUDA 11.8
-FROM pytorch/pytorch:2.1.2-cuda11.8-cudnn8-devel
+# Stage 1: Build base image
+FROM pytorch/pytorch:2.1.2-cuda11.8-cudnn8-devel AS ml-base
 
 # Set timezone to avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
-# System dependencies
+# Common system dependencies
 RUN apt-get update && apt-get install -y \
-    wget \
     git \
+    wget \
     curl \
     build-essential \
     libjpeg-dev \
     libpng-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip and install wheel
+RUN python -m pip install --upgrade pip setuptools wheel
+
+# Install PyTorch with CUDA 11.8 support
+RUN pip install --force-reinstall --no-cache-dir torch==2.1.2 torchvision==0.16.2 \
+    --extra-index-url https://download.pytorch.org/whl/cu118
+
+# Install xformers with CUDA 11.8 support
+RUN pip install xformers --extra-index-url https://download.pytorch.org/whl/cu118
+
+# Set common environment variables
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+
+# Create common directories
+RUN mkdir -p /opt/ml/code /opt/ml/cache
+
+WORKDIR /opt/ml/code
+
+# Stage 2: Build inference image
+FROM ml-base
+
+# Additional system dependencies for inference
+RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and setuptools
-RUN python -m pip install --upgrade pip setuptools wheel
-
-# Core Python packages
-RUN pip install --no-cache-dir \
-    torch==2.1.2 \
-    torchvision==0.16.2 \
-    xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu118
+# Install specific xformers version for inference
+RUN pip install --no-cache-dir xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu118
 
 # AI generation stack - install normally with dependencies
 RUN pip install --no-cache-dir \
@@ -67,7 +86,6 @@ WORKDIR /opt/ml/code
 RUN chmod +x /opt/ml/code/serve && ln -s /opt/ml/code/serve /usr/local/bin/serve
 
 # Set environment variables for SageMaker
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
 
 # Let SageMaker handle entrypoint
