@@ -4,7 +4,22 @@ SageMaker serve entrypoint for inference container
 """
 import subprocess
 import sys
+import os
 
 if __name__ == "__main__":
-    # Start the Flask inference server
-    subprocess.call([sys.executable, "/opt/ml/code/controlnet_lora_handler.py"])
+    # Get the handler program from environment or default to inference.py
+    program = os.environ.get('SAGEMAKER_PROGRAM', 'inference.py')
+    handler_path = f"/opt/ml/code/{program}"
+    
+    if program == "inference.py":
+        # Start FastAPI with uvicorn
+        subprocess.call([
+            sys.executable, "-m", "uvicorn", 
+            "inference:app", 
+            "--host", "0.0.0.0", 
+            "--port", "8080",
+            "--workers", "1"
+        ], cwd="/opt/ml/code")
+    else:
+        # Fallback to direct execution for other handlers
+        subprocess.call([sys.executable, handler_path])

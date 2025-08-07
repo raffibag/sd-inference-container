@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     curl \
     ca-certificates \
+    xz-utils \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install ffmpeg via static binary (~25MB vs 1GB APT)
@@ -30,7 +31,8 @@ RUN pip install --no-cache-dir \
     triton==2.1.0 \
     opencv-python-headless \
     Pillow \
-    flask \
+    fastapi \
+    uvicorn[standard] \
     boto3 \
     imageio[ffmpeg] \
     scipy \
@@ -54,7 +56,7 @@ RUN rm -rf /root/.cache /tmp/* /var/tmp/* /opt/ml/cache \
     && find /usr/local -name '*.pyc' -delete
 
 # Set SageMaker entrypoint
-ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
+ENV SAGEMAKER_PROGRAM=inference.py
 
 # Let SageMaker handle entrypoint
 ENTRYPOINT []
