@@ -105,8 +105,7 @@ class MultiLoRAComposer:
             base_model,
             controlnet=initial_controlnet,
             torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-            use_safetensors=True,
-            variant="fp16" if self.device == "cuda" else None
+            use_safetensors=True
         ).to(self.device)
         
         # Cache the initial controlnet
@@ -398,7 +397,9 @@ Return JSON:
         generator = torch.Generator(device=self.device).manual_seed(seed) if seed else None
 
         # Generate images with or without ControlNet
-        with torch.autocast("cuda" if self.device == "cuda" else "cpu"):
+        # Disable autocast temporarily to debug black square issue
+        # with torch.autocast("cuda" if self.device == "cuda" else "cpu"):
+        if True:  # Temporary replacement for autocast context
             if control_image is not None:
                 # ControlNet generation
                 result = self.pipeline(
