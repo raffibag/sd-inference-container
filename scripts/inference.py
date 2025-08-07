@@ -414,12 +414,15 @@ Return JSON:
                     generator=generator
                 )
             else:
-                # Regular SDXL generation (ControlNet pipeline without control image)
+                # Regular SDXL generation - create blank control image with very low conditioning
+                blank_image = Image.new('RGB', (width, height), color='white')
                 result = self.pipeline(
                     prompt=prompt,
                     negative_prompt=negative_prompt,
+                    image=blank_image,
                     num_inference_steps=steps,
                     guidance_scale=scale,
+                    controlnet_conditioning_scale=0.0,  # Disable ControlNet influence
                     width=width,
                     height=height,
                     num_images_per_prompt=num_images,
