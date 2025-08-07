@@ -92,6 +92,13 @@ class MultiLoRAComposer:
         self.controlnets = {}
         self.controlnet_processors = {}
 
+        # Debug device and CUDA info
+        logger.info(f"🔍 Device: {self.device}")
+        logger.info(f"🔍 CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logger.info(f"🔍 CUDA device: {torch.cuda.get_device_name(0)}")
+            logger.info(f"🔍 CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        
         logger.info("Loading SDXL ControlNet pipeline...")
         
         # Load initial ControlNet (canny) for the pipeline
@@ -105,8 +112,12 @@ class MultiLoRAComposer:
             base_model,
             controlnet=initial_controlnet,
             torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-            use_safetensors=True
+            use_safetensors=True,
+            add_watermarker=False  # Disable watermarker which might cause issues
         ).to(self.device)
+        
+        # Ensure VAE is in float32 to avoid black images
+        self.pipeline.vae = self.pipeline.vae.to(dtype=torch.float32)
         
         # Cache the initial controlnet
         self.controlnets["canny"] = initial_controlnet
@@ -396,6 +407,11 @@ Return JSON:
         # Set seed
         generator = torch.Generator(device=self.device).manual_seed(seed) if seed else None
 
+        # Debug generation parameters
+        logger.info(f"🎨 Generation params - Device: {self.device}, Steps: {steps}, Size: {width}x{height}")
+        logger.info(f"🎨 Prompt: '{prompt[:50]}...' Negative: '{negative_prompt[:50]}...'")
+        logger.info(f"🎨 Control type: {control_type}, Has control image: {control_image is not None}")
+        
         # Generate images with or without ControlNet
         # Disable autocast temporarily to debug black square issue
         # with torch.autocast("cuda" if self.device == "cuda" else "cpu"):
