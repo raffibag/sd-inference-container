@@ -5,21 +5,28 @@ phases:
     commands:
       - echo Logging in to Amazon ECR...
       - aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 796245059390.dkr.ecr.us-west-2.amazonaws.com
+      - BASE_REPO_URI=796245059390.dkr.ecr.us-west-2.amazonaws.com/pytorch-base
+      - SD_REPO_URI=796245059390.dkr.ecr.us-west-2.amazonaws.com/stable-diffusion-inference
+      - IMAGE_TAG=ultra-lean
       - echo Logged in to ECR successfully
       
   build:
     commands:
       - echo Build started on `date`
-      - echo Building Stable Diffusion inference container...
-      - docker build --progress=plain -t sd-inference .
-      - echo Tagging container for ECR...
-      - docker tag sd-inference:latest 796245059390.dkr.ecr.us-west-2.amazonaws.com/stable-diffusion-inference:latest
+      # Pull pytorch-base from ECR and tag locally
+      - echo "=== Pulling pytorch-base:ultra-lean from ECR ==="
+      - docker pull $BASE_REPO_URI:$IMAGE_TAG
+      - docker tag $BASE_REPO_URI:$IMAGE_TAG pytorch-base:$IMAGE_TAG
+      
+      # Build sd-inference container
+      - echo "=== Building sd-inference container ==="
+      - docker build --progress=plain -t $SD_REPO_URI:$IMAGE_TAG .
       
   post_build:
     commands:
       - echo Build completed on `date`
-      - echo Pushing container to ECR...
-      - docker push 796245059390.dkr.ecr.us-west-2.amazonaws.com/stable-diffusion-inference:latest
+      - echo Pushing sd-inference container to ECR...
+      - docker push $SD_REPO_URI:$IMAGE_TAG
       - echo Container pushed successfully!
       
 # Use a 2xlarge instance for faster builds
