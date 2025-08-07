@@ -104,20 +104,18 @@ class MultiLoRAComposer:
         # Load initial ControlNet (canny) for the pipeline
         initial_controlnet = ControlNetModel.from_pretrained(
             "diffusers/controlnet-canny-sdxl-1.0-small",
-            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+            torch_dtype=torch.float32  # Use float32 consistently
         )
         
         # Create ControlNet pipeline (handles both regular SDXL and ControlNet)
+        # Use float32 throughout to avoid dtype mismatches
         self.pipeline = StableDiffusionXLControlNetPipeline.from_pretrained(
             base_model,
             controlnet=initial_controlnet,
-            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+            torch_dtype=torch.float32,  # Use float32 to avoid dtype mismatches
             use_safetensors=True,
             add_watermarker=False  # Disable watermarker which might cause issues
         ).to(self.device)
-        
-        # Ensure VAE is in float32 to avoid black images
-        self.pipeline.vae = self.pipeline.vae.to(dtype=torch.float32)
         
         # Cache the initial controlnet
         self.controlnets["canny"] = initial_controlnet
@@ -160,7 +158,7 @@ class MultiLoRAComposer:
                     logger.info(f"Loading {name} ControlNet...")
                     controlnet = ControlNetModel.from_pretrained(
                         model_id,
-                        torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+                        torch_dtype=torch.float32  # Use float32 consistently
                     )
                     self.controlnets[name] = controlnet
                     logger.info(f"✅ Loaded {name} ControlNet")
