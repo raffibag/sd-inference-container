@@ -1,52 +1,23 @@
-# Stage 1: Build base image
-FROM pytorch/pytorch:2.1.2-cuda11.8-cudnn8-devel AS ml-base
+# Base image with CUDA 11.8, Python 3.10, and PyTorch stack
+# Use the ultra-lean pytorch-base container as base
+FROM pytorch-base:ultra-lean
 
-# Set timezone to avoid interactive prompts
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
-
-# Common system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    wget \
-    curl \
-    build-essential \
-    libjpeg-dev \
-    libpng-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Upgrade pip and install wheel
-RUN python -m pip install --upgrade pip setuptools wheel
-
-# Install PyTorch with CUDA 11.8 support
-RUN pip install --force-reinstall --no-cache-dir torch==2.1.2 torchvision==0.16.2 \
-    --extra-index-url https://download.pytorch.org/whl/cu118
-
-# Install xformers with CUDA 11.8 support
-RUN pip install xformers --extra-index-url https://download.pytorch.org/whl/cu118
-
-# Set common environment variables
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-
-# Create common directories
-RUN mkdir -p /opt/ml/code /opt/ml/cache
-
-WORKDIR /opt/ml/code
-
-# Stage 2: Build inference image
-FROM ml-base
-
-# Additional system dependencies for inference
-RUN apt-get update && apt-get install -y \
+# Install minimal system dependencies (NO ffmpeg from apt)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install specific xformers version for inference
-RUN pip install --no-cache-dir xformers==0.0.23.post1 --extra-index-url https://download.pytorch.org/whl/cu118
+# Install ffmpeg via static binary (~25MB vs 1GB APT)
+RUN curl -L -o /tmp/ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+    && mkdir -p /usr/local/bin/ffmpeg-static \
+    && tar -xf /tmp/ffmpeg.tar.xz -C /usr/local/bin/ffmpeg-static --strip-components=1 \
+    && ln -s /usr/local/bin/ffmpeg-static/ffmpeg /usr/local/bin/ffmpeg \
+    && rm -rf /tmp/ffmpeg.tar.xz
 
-# AI generation stack - install normally with dependencies
+# Python deps for inference and video generation
 RUN pip install --no-cache-dir \
     diffusers==0.27.2 \
     transformers==4.40.2 \
@@ -62,16 +33,8 @@ RUN pip install --no-cache-dir \
     flask \
     boto3 \
     imageio[ffmpeg] \
-    moviepy \
-    timm \
-    scipy
-
-# CRITICAL: Force downgrade NumPy to 1.x as the very last step
-# This ensures all dependencies are installed but we still get NumPy 1.x
-RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
-
-# Verify NumPy version
-RUN python -c "import numpy; assert numpy.__version__.startswith('1.'), f'NumPy {numpy.__version__} is not 1.x'"
+    scipy \
+    numpy==1.26.4
 
 # HuggingFace cache directories (avoid re-download)
 ENV HF_HOME=/opt/ml/cache/huggingface
@@ -82,16 +45,21 @@ RUN mkdir -p /opt/ml/cache/huggingface
 COPY scripts/ /opt/ml/code/
 WORKDIR /opt/ml/code
 
-# Add serve script to path
+# Add serve script to PATH
 RUN chmod +x /opt/ml/code/serve && ln -s /opt/ml/code/serve /usr/local/bin/serve
 
-# Set environment variables for SageMaker
+# Final cleanup to shrink image
+RUN rm -rf /root/.cache /tmp/* /var/tmp/* /opt/ml/cache \
+    && find /usr/local -depth -type d -name __pycache__ -exec rm -rf {} + \
+    && find /usr/local -name '*.pyc' -delete
+
+# Set SageMaker entrypoint
 ENV SAGEMAKER_PROGRAM=controlnet_lora_handler.py
 
 # Let SageMaker handle entrypoint
 ENTRYPOINT []
 CMD ["serve"]
 
-# Health check for better monitoring
+# Health check for container monitoring
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:8080/ping || exit 1
