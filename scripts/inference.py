@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 composer = None
 
+@app.on_event("startup")
+async def startup_event():
+    global composer
+    if composer is None:
+        composer = model_fn()
+
 class SchedulerType(str, Enum):
     dpmpp_2m_karras = "dpmpp_2m_karras"  # Default - DPM++ 2M Karras (recommended)
     dpmpp_2m = "dpmpp_2m"                # DPM++ 2M without Karras
