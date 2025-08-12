@@ -46,7 +46,7 @@ app = FastAPI(title="Vibez Multi-LoRA Inference API")
 # SINGLE SOURCE OF TRUTH FOR DEVICE AND DTYPE
 # ==============================================================================
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DTYPE = torch.float32  # Use float32 consistently to avoid black image issues
+DTYPE = torch.float16 if DEVICE.type == "cuda" else torch.float32
 
 logger.info(f"🔧 Device: {DEVICE}, Dtype: {DTYPE}")
 if DEVICE.type == "cuda":
@@ -116,55 +116,51 @@ def load_controlnet(repo_id: str, name: str = None) -> ControlNetModel:
 class MultiLoRAComposer:
     def __init__(self, base_model: str = "stabilityai/stable-diffusion-xl-base-1.0"):
         self.base_model = base_model
-        self.pipeline = None
-        self.controlnets = {}
+        
+        # Separate pipelines for memory efficiency
+        self.pipe_base = None           # Base SDXL pipeline (no ControlNet)
+        self.pipe_cn = None            # ControlNet pipeline (lazy loaded)
+        self.loaded_controlnet = None  # Currently loaded ControlNet type
+        
+        # Processors and caching
         self.controlnet_processors = {}
         self.s3_client = None
         self.lora_cache = {}
         self.active_loras = {}
         self.temp_dir = tempfile.mkdtemp(prefix="lora_cache_")
         
-        self._initialize_pipeline()
+        self._initialize_base_pipeline()
         
-    def _initialize_pipeline(self):
-        """Initialize SDXL pipeline with ControlNet support"""
+    def _initialize_base_pipeline(self):
+        """Initialize base SDXL pipeline (no ControlNet for memory efficiency)"""
         import boto3
         self.s3_client = boto3.client('s3')
         
-        logger.info("🚀 Initializing SDXL ControlNet pipeline...")
+        logger.info("🚀 Initializing base SDXL pipeline (memory-efficient)...")
         
         # Clear GPU cache before loading
         if DEVICE.type == "cuda":
             torch.cuda.empty_cache()
             logger.info("🧹 Cleared GPU cache")
         
-        # Load initial ControlNet (canny) with consistent device/dtype
-        initial_controlnet = load_controlnet(
-            "diffusers/controlnet-canny-sdxl-1.0-small",
-            name="canny"
-        )
+        # Create base SDXL pipeline (no ControlNet)
+        from diffusers import StableDiffusionXLPipeline
         
-        # Create pipeline with consistent dtype
-        self.pipeline = StableDiffusionXLControlNetPipeline.from_pretrained(
+        self.pipe_base = StableDiffusionXLPipeline.from_pretrained(
             self.base_model,
-            controlnet=initial_controlnet,
             torch_dtype=DTYPE,
             use_safetensors=True,
             add_watermarker=False
-        )
+        ).to(DEVICE)
         
-        # Move entire pipeline to device
-        self.pipeline = self.pipeline.to(DEVICE)
-        
-        # Cache the initial controlnet
-        self.controlnets["canny"] = initial_controlnet
-        
-        # Load additional ControlNets
-        self._load_additional_controlnets()
+        # Keep VAE in fp32 to prevent black images
+        if DEVICE.type == "cuda":
+            self.pipe_base.vae.to(dtype=torch.float32)
+            logger.info("✅ VAE set to fp32 to prevent black images")
         
         # Configure scheduler
-        self.pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
-            self.pipeline.scheduler.config,
+        self.pipe_base.scheduler = DPMSolverMultistepScheduler.from_config(
+            self.pipe_base.scheduler.config,
             algorithm_type="dpmsolver++",
             solver_order=2,
             use_karras_sigmas=True
@@ -172,84 +168,139 @@ class MultiLoRAComposer:
         
         # Enable optimizations
         if DEVICE.type == "cuda":
-            self.pipeline.enable_attention_slicing()
-            # Enable VAE optimizations for large images
-            self.pipeline.enable_vae_slicing()
-            self.pipeline.enable_vae_tiling()
+            self.pipe_base.enable_attention_slicing()
+            self.pipe_base.enable_vae_slicing()
+            self.pipe_base.enable_vae_tiling()
             
             # Enable xformers if available
             try:
-                self.pipeline.enable_xformers_memory_efficient_attention()
+                self.pipe_base.enable_xformers_memory_efficient_attention()
                 logger.info("✅ XFormers enabled")
             except:
                 logger.info("⚠️ XFormers not available")
         
-        # Verify device consistency
-        self._verify_device_consistency()
-        
-        logger.info("✅ Pipeline initialized successfully")
+        logger.info("✅ Base pipeline initialized successfully (~7GB VRAM)")
     
-    def _load_additional_controlnets(self):
-        """Load additional ControlNet models"""
-        controlnet_configs = {
-            "depth": "diffusers/controlnet-depth-sdxl-1.0",
-            "openpose": "thibaud/controlnet-openpose-sdxl-1.0"
+    def _get_cn_pipeline(self, control_type: str):
+        """Get ControlNet pipeline with aggressive VRAM management (max 1 CN in VRAM)"""
+        
+        # If already loaded with same ControlNet, reuse
+        if self.pipe_cn and self.loaded_controlnet == control_type:
+            return self.pipe_cn
+        
+        # Free previous CN pipeline aggressively
+        if self.pipe_cn:
+            try:
+                del self.pipe_cn.controlnet
+            except Exception:
+                pass
+            del self.pipe_cn
+            self.pipe_cn = None
+            torch.cuda.empty_cache()
+            logger.info(f"🧹 Evicted previous ControlNet ({self.loaded_controlnet})")
+        
+        # ControlNet repository mapping
+        controlnet_repos = {
+            "canny": "diffusers/controlnet-canny-sdxl-1.0-small",
+            "depth": "diffusers/controlnet-depth-sdxl-1.0", 
+            "openpose": "thibaud/controlnet-openpose-sdxl-1.0",
         }
         
-        for name, repo_id in controlnet_configs.items():
+        if control_type not in controlnet_repos:
+            raise ValueError(f"Unknown ControlNet type: {control_type}")
+        
+        repo_id = controlnet_repos[control_type]
+        
+        # Lazy-load requested ControlNet
+        logger.info(f"🔄 Loading {control_type} ControlNet on demand...")
+        
+        cn = ControlNetModel.from_pretrained(
+            repo_id,
+            torch_dtype=DTYPE,
+            use_safetensors=True
+        ).to(DEVICE)
+        
+        # Create ControlNet pipeline
+        self.pipe_cn = StableDiffusionXLControlNetPipeline.from_pretrained(
+            self.base_model,
+            controlnet=cn,
+            torch_dtype=DTYPE,
+            use_safetensors=True,
+            add_watermarker=False
+        ).to(DEVICE)
+        
+        # Keep VAE in fp32 to prevent black images  
+        if DEVICE.type == "cuda":
+            self.pipe_cn.vae.to(dtype=torch.float32)
+        
+        # Apply same optimizations
+        if DEVICE.type == "cuda":
+            self.pipe_cn.enable_attention_slicing()
+            self.pipe_cn.enable_vae_slicing()
+            self.pipe_cn.enable_vae_tiling()
+            
             try:
-                cn = load_controlnet(repo_id, name)
-                self.controlnets[name] = cn
+                self.pipe_cn.enable_xformers_memory_efficient_attention()
+            except:
+                pass
+        
+        # Configure scheduler to match base pipeline
+        self.pipe_cn.scheduler = DPMSolverMultistepScheduler.from_config(
+            self.pipe_cn.scheduler.config,
+            algorithm_type="dpmsolver++",
+            solver_order=2,
+            use_karras_sigmas=True
+        )
+        
+        # Apply any active LoRAs to CN pipeline
+        if hasattr(self, 'active_loras') and self.active_loras:
+            logger.info(f"🔄 Applying {len(self.active_loras)} LoRAs to ControlNet pipeline...")
+            try:
+                for adapter_name, weight in self.active_loras.items():
+                    # LoRAs should already be downloaded, just load them
+                    local_path = next((os.path.join(self.temp_dir, f) for f in os.listdir(self.temp_dir) 
+                                     if adapter_name.replace('_', '') in f), None)
+                    if local_path:
+                        self.pipe_cn.load_lora_weights(local_path, adapter_name=adapter_name)
+                
+                self.pipe_cn.set_adapters(
+                    list(self.active_loras.keys()),
+                    adapter_weights=list(self.active_loras.values())
+                )
+                logger.info("✅ LoRAs applied to ControlNet pipeline")
             except Exception as e:
-                logger.warning(f"⚠️ Could not load {name}: {e}")
+                logger.warning(f"⚠️ Failed to apply some LoRAs to CN pipeline: {e}")
         
-        # Load processors
-        self._load_processors()
+        self.loaded_controlnet = control_type
+        logger.info(f"✅ {control_type} ControlNet loaded (~14GB VRAM)")
+        
+        return self.pipe_cn
     
-    def _load_processors(self):
-        """Load ControlNet preprocessors"""
+    
+    
+    def _load_processor_on_demand(self, control_type: str):
+        """Load a single processor on demand (keep on CPU to save VRAM)"""
         try:
-            from controlnet_aux import CannyDetector, OpenposeDetector
-            from transformers import pipeline
-            
-            self.controlnet_processors["canny"] = CannyDetector()
-            self.controlnet_processors["openpose"] = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
-            
-            # Load depth processor with device specification
-            self.controlnet_processors["depth"] = pipeline(
-                "depth-estimation",
-                model="Intel/dpt-large",
-                device=0 if DEVICE.type == "cuda" else -1
-            )
-            
-            logger.info("✅ Loaded ControlNet processors")
+            if control_type == "canny":
+                from controlnet_aux import CannyDetector
+                self.controlnet_processors["canny"] = CannyDetector()
+                logger.info("✅ Loaded Canny processor (CPU)")
+            elif control_type == "openpose":
+                from controlnet_aux import OpenposeDetector
+                self.controlnet_processors["openpose"] = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+                logger.info("✅ Loaded OpenPose processor (CPU)")
+            elif control_type == "depth":
+                from transformers import pipeline
+                # Force CPU to save VRAM - preprocessors don't need GPU
+                self.controlnet_processors["depth"] = pipeline(
+                    "depth-estimation",
+                    model="Intel/dpt-large",
+                    device=-1  # Always CPU for VRAM savings
+                )
+                logger.info("✅ Loaded Depth processor (CPU)")
         except Exception as e:
-            logger.warning(f"⚠️ Some processors not available: {e}")
+            logger.warning(f"⚠️ Failed to load {control_type} processor: {e}")
     
-    def switch_controlnet(self, control_type: ControlNetType):
-        """Switch to a different ControlNet"""
-        if control_type == ControlNetType.none:
-            return True
-            
-        if control_type.value not in self.controlnets:
-            logger.warning(f"⚠️ ControlNet {control_type.value} not available")
-            return False
-        
-        new_cn = self.controlnets[control_type.value]
-        
-        # Ensure the new ControlNet is on the same device/dtype
-        new_cn = new_cn.to(device=DEVICE, dtype=DTYPE)
-        
-        # Assign to pipeline
-        self.pipeline.controlnet = new_cn
-        
-        logger.info(f"🔄 Switched to {control_type.value} ControlNet")
-        
-        # Verify consistency after switch (skip if using offload)
-        if not hasattr(self.pipeline, '_offload_hooks'):
-            self._verify_device_consistency()
-        
-        return True
     
     def _resize_control_image(self, img: Union[Image.Image, np.ndarray], width: int, height: int):
         """Resize control image to match requested dimensions"""
@@ -270,6 +321,10 @@ class MultiLoRAComposer:
             
             # Resize to match requested dimensions first
             control_image = control_image.resize((width, height), Image.BICUBIC)
+            
+            # Load processor on demand if not already loaded
+            if control_type.value not in self.controlnet_processors:
+                self._load_processor_on_demand(control_type.value)
             
             processor = self.controlnet_processors.get(control_type.value)
             if not processor:
@@ -368,15 +423,15 @@ class MultiLoRAComposer:
             # Generate adapter name from path
             adapter_name = model_path.replace('/', '_').replace(':', '_')
             
-            # Try loading the LoRA weights
+            # Load LoRA on base pipeline
             try:
                 # First try as single file
-                self.pipeline.load_lora_weights(local_path, adapter_name=adapter_name)
+                self.pipe_base.load_lora_weights(local_path, adapter_name=adapter_name)
             except Exception as e1:
                 # Try as folder with adapter_config.json
                 try:
                     folder = os.path.dirname(local_path) if os.path.isfile(local_path) else local_path
-                    self.pipeline.load_lora_weights(folder, adapter_name=adapter_name)
+                    self.pipe_base.load_lora_weights(folder, adapter_name=adapter_name)
                 except Exception as e2:
                     logger.error(f"Failed both loading methods: file={e1}, folder={e2}")
                     raise e2
@@ -384,8 +439,8 @@ class MultiLoRAComposer:
             # Track this LoRA
             self.active_loras[adapter_name] = weight
             
-            # Apply all active LoRAs
-            self.pipeline.set_adapters(
+            # Apply to base pipeline
+            self.pipe_base.set_adapters(
                 list(self.active_loras.keys()),
                 adapter_weights=list(self.active_loras.values())
             )
@@ -455,23 +510,26 @@ class MultiLoRAComposer:
     def clear_loras(self):
         """Clear all loaded LoRAs - safe to call even if no LoRAs loaded"""
         if hasattr(self, 'active_loras') and self.active_loras:
+            # Clear from base pipeline
             try:
-                # Unload LoRA weights
-                self.pipeline.unload_lora_weights()
+                self.pipe_base.unload_lora_weights()
+                self.pipe_base.set_adapters([], adapter_weights=[])
             except Exception as e:
-                logger.debug(f"No LoRA weights to unload: {e}")
+                logger.debug(f"No LoRA weights to unload from base: {e}")
             
-            try:
-                # Clear adapter settings
-                self.pipeline.set_adapters([], adapter_weights=[])
-            except Exception as e:
-                logger.debug(f"No adapters to clear: {e}")
+            # Clear from CN pipeline if loaded
+            if self.pipe_cn:
+                try:
+                    self.pipe_cn.unload_lora_weights()
+                    self.pipe_cn.set_adapters([], adapter_weights=[])
+                except Exception as e:
+                    logger.debug(f"No LoRA weights to unload from CN: {e}")
             
             self.active_loras = {}
-            logger.info("Cleared all LoRAs")
+            logger.info("Cleared all LoRAs from both pipelines")
     
-    def set_scheduler(self, scheduler_type: SchedulerType):
-        """Configure scheduler"""
+    def _set_scheduler_for_pipeline(self, pipeline, scheduler_type: SchedulerType):
+        """Configure scheduler for a specific pipeline"""
         scheduler_map = {
             SchedulerType.dpmpp_2m_karras: lambda config: DPMSolverMultistepScheduler.from_config(
                 config, algorithm_type="dpmsolver++", solver_order=2, use_karras_sigmas=True
@@ -487,7 +545,7 @@ class MultiLoRAComposer:
         }
         
         if scheduler_type in scheduler_map:
-            self.pipeline.scheduler = scheduler_map[scheduler_type](self.pipeline.scheduler.config)
+            pipeline.scheduler = scheduler_map[scheduler_type](pipeline.scheduler.config)
             logger.info(f"✅ Scheduler set to {scheduler_type.value}")
     
     def generate(
@@ -513,8 +571,8 @@ class MultiLoRAComposer:
             seed = random.randint(0, 2**32 - 1)
             logger.info(f"Generated random seed: {seed}")
         
-        # Set scheduler
-        self.set_scheduler(scheduler)
+        # Set scheduler on base pipeline (will copy to CN pipeline when loaded)
+        self._set_scheduler_for_pipeline(self.pipe_base, scheduler)
         
         # Clear any previous LoRAs (important for stateless inference)
         self.clear_loras()
@@ -533,18 +591,13 @@ class MultiLoRAComposer:
         # Process ControlNet if specified
         control_image = None
         if control_type != ControlNetType.none and control_image_data:
-            # Switch to appropriate ControlNet
-            if not self.switch_controlnet(control_type):
-                logger.warning("ControlNet switch failed, using regular generation")
-                control_type = ControlNetType.none
+            # Process control image (returns PIL or numpy) with correct size
+            control_image = self.process_control_image(control_image_data, control_type, width, height)
+            if control_image is not None:
+                logger.info(f"✅ Using {control_type.value} ControlNet")
             else:
-                # Process control image (returns PIL or numpy) with correct size
-                control_image = self.process_control_image(control_image_data, control_type, width, height)
-                if control_image is not None:
-                    logger.info(f"✅ Using {control_type.value} ControlNet")
-                else:
-                    logger.warning("Control image processing failed")
-                    control_type = ControlNetType.none
+                logger.warning("Control image processing failed, falling back to base generation")
+                control_type = ControlNetType.none
         
         # IMPORTANT: Generator must be on the same device
         generator = torch.Generator(device=DEVICE).manual_seed(seed)
@@ -552,38 +605,35 @@ class MultiLoRAComposer:
         logger.info(f"🎨 Generating {num_images} image(s) at {width}x{height}")
         logger.info(f"🎨 ControlNet: {control_type.value}, LoRAs: {loras_loaded}, Seed: {seed}")
         
-        # Generate with or without ControlNet
+        # Generate with appropriate pipeline
         try:
             # Use autocast and inference mode for performance
             with torch.inference_mode(), torch.autocast(
                 device_type="cuda" if DEVICE.type == "cuda" else "cpu",
                 dtype=DTYPE
             ):
-                if control_image is not None:
-                    # ControlNet generation - pass PIL/numpy, let diffusers handle conversion
-                    images = self.pipeline(
+                if control_type == ControlNetType.none:
+                    # Use base pipeline (no ControlNet) - memory efficient
+                    images = self.pipe_base(
                         prompt=prompt,
                         negative_prompt=negative_prompt,
-                        image=control_image,  # PIL or numpy - diffusers will handle
                         num_inference_steps=steps,
                         guidance_scale=guidance_scale,
-                        controlnet_conditioning_scale=controlnet_conditioning_scale,
                         width=width,
                         height=height,
                         num_images_per_prompt=num_images,
                         generator=generator
                     ).images
                 else:
-                    # Regular gen with ControlNet effectively disabled
-                    # Use neutral gray instead of white to avoid bias
-                    blank = Image.new("RGB", (width, height), (127, 127, 127))
-                    images = self.pipeline(
+                    # Use ControlNet pipeline - lazy loaded
+                    cn_pipeline = self._get_cn_pipeline(control_type.value)
+                    images = cn_pipeline(
                         prompt=prompt,
                         negative_prompt=negative_prompt,
-                        image=blank,  # Required by ControlNet pipeline
-                        controlnet_conditioning_scale=0.0,  # Disable ControlNet
+                        image=control_image,  # PIL or numpy - diffusers will handle
                         num_inference_steps=steps,
                         guidance_scale=guidance_scale,
+                        controlnet_conditioning_scale=controlnet_conditioning_scale,
                         width=width,
                         height=height,
                         num_images_per_prompt=num_images,
@@ -663,20 +713,16 @@ async def health_check():
     if composer is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
-    # Get current ControlNet
-    current_cn = "unknown"
-    if hasattr(composer.pipeline, 'controlnet'):
-        for name, cn in composer.controlnets.items():
-            if composer.pipeline.controlnet == cn:
-                current_cn = name
-                break
-    
     return {
         "status": "healthy",
         "device": str(DEVICE),
         "dtype": str(DTYPE),
-        "current_controlnet": current_cn,
-        "available_controlnets": list(composer.controlnets.keys())
+        "loaded_controlnet": composer.loaded_controlnet if composer.loaded_controlnet else "none",
+        "memory_mode": "lazy_loading",
+        "pipelines": {
+            "base": "loaded" if composer.pipe_base else "none",
+            "controlnet": "loaded" if composer.pipe_cn else "none"
+        }
     }
 
 @app.post("/invocations")
