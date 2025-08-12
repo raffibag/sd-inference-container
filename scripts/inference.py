@@ -46,7 +46,7 @@ app = FastAPI(title="Vibez Multi-LoRA Inference API")
 # SINGLE SOURCE OF TRUTH FOR DEVICE AND DTYPE
 # ==============================================================================
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DTYPE = torch.float16 if DEVICE.type == "cuda" else torch.float32
+DTYPE = torch.float32  # Use float32 consistently to avoid black image issues
 
 logger.info(f"🔧 Device: {DEVICE}, Dtype: {DTYPE}")
 if DEVICE.type == "cuda":
