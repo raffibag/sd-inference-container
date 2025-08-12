@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Vibez Multi-LoRA Inference API")
 
 # ==============================================================================
-# SINGLE SOURCE OF TRUTH FOR DEVICE AND DTYPE
+# SINGLE SOURCE OF TRUTH FOR DEVICE AND DTYPE + MULTI-GPU ALLOCATION
 # ==============================================================================
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -58,11 +58,49 @@ AMP_DTYPE = (
     else (torch.float16 if DEVICE.type == "cuda" else torch.bfloat16)
 )
 
+# Multi-GPU allocation strategy
+GPU_COUNT = torch.cuda.device_count() if DEVICE.type == "cuda" else 0
+GPU_ALLOCATION = {
+    "base_pipeline": 0,      # Base SDXL on GPU 0
+    "controlnet": 1,         # ControlNet on GPU 1 (if available)
+    "depth_processor": 2,    # Depth processor on GPU 2 (if available)
+    "openpose_processor": 3, # OpenPose on GPU 3 (if available)
+    "canny_processor": 0,    # Canny shares with base (lightweight)
+}
+
+def get_optimal_gpu(component: str) -> int:
+    """Get optimal GPU for component with fallback strategy"""
+    if GPU_COUNT <= 1:
+        return 0
+    
+    preferred = GPU_ALLOCATION.get(component, 0)
+    
+    # If preferred GPU exists, use it
+    if preferred < GPU_COUNT:
+        return preferred
+    
+    # Fallback strategy: distribute across available GPUs
+    fallback_order = {
+        "controlnet": [1, 2, 3, 0],
+        "depth_processor": [2, 3, 1, 0], 
+        "openpose_processor": [3, 2, 1, 0],
+        "canny_processor": [0, 1, 2, 3],
+        "base_pipeline": [0, 1, 2, 3]
+    }
+    
+    for gpu_id in fallback_order.get(component, [0]):
+        if gpu_id < GPU_COUNT:
+            return gpu_id
+    
+    return 0  # Final fallback
+
 logger.info(f"🔧 Device: {DEVICE}, Dtype: {DTYPE}, AMP: {AMP_DTYPE}")
 if DEVICE.type == "cuda":
-    logger.info(f"🔍 CUDA device: {torch.cuda.get_device_name(0)}")
-    logger.info(f"🔍 CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+    logger.info(f"🔍 GPU Count: {GPU_COUNT}")
+    for i in range(GPU_COUNT):
+        logger.info(f"🔍 GPU {i}: {torch.cuda.get_device_name(i)} ({torch.cuda.get_device_properties(i).total_memory / 1024**3:.2f} GB)")
     logger.info(f"🔍 BF16 supported: {torch.cuda.is_bf16_supported()}")
+    logger.info(f"🎯 GPU Allocation: Base={get_optimal_gpu('base_pipeline')}, CN={get_optimal_gpu('controlnet')}, Depth={get_optimal_gpu('depth_processor')}, OpenPose={get_optimal_gpu('openpose_processor')}")
     # Enable cudnn benchmark for performance
     torch.backends.cudnn.benchmark = True
 
@@ -158,12 +196,14 @@ class MultiLoRAComposer:
         # Create base SDXL pipeline (no ControlNet)
         from diffusers import StableDiffusionXLPipeline
         
+        base_gpu = get_optimal_gpu("base_pipeline")
+        base_device = torch.device(f"cuda:{base_gpu}")
         self.pipe_base = StableDiffusionXLPipeline.from_pretrained(
             self.base_model,
             torch_dtype=DTYPE,
             use_safetensors=True,
             add_watermarker=False
-        ).to(DEVICE)
+        ).to(base_device)
         
         # Keep VAE in fp32 to prevent black images
         if DEVICE.type == "cuda":
@@ -223,14 +263,16 @@ class MultiLoRAComposer:
         
         repo_id = controlnet_repos[control_type]
         
-        # Lazy-load requested ControlNet
-        logger.info(f"🔄 Loading {control_type} ControlNet on demand...")
+        # Lazy-load requested ControlNet on optimal GPU
+        cn_gpu = get_optimal_gpu("controlnet")
+        cn_device = torch.device(f"cuda:{cn_gpu}")
+        logger.info(f"🔄 Loading {control_type} ControlNet on demand (GPU {cn_gpu})...")
         
         cn = ControlNetModel.from_pretrained(
             repo_id,
             torch_dtype=DTYPE,
             use_safetensors=True
-        ).to(DEVICE)
+        ).to(cn_device)
         
         # Create ControlNet pipeline
         self.pipe_cn = StableDiffusionXLControlNetPipeline.from_pretrained(
@@ -239,7 +281,7 @@ class MultiLoRAComposer:
             torch_dtype=DTYPE,
             use_safetensors=True,
             add_watermarker=False
-        ).to(DEVICE)
+        ).to(cn_device)
         
         # Keep VAE in fp32 to prevent black images  
         if DEVICE.type == "cuda":
@@ -289,28 +331,29 @@ class MultiLoRAComposer:
     
     
     def _load_processor_on_demand(self, control_type: str):
-        """Load a single processor on demand (USE GPU FOR SPEED)"""
+        """Load a single processor on demand (USE OPTIMAL GPU FOR SPEED)"""
         try:
             if control_type == "canny":
                 from controlnet_aux import CannyDetector
                 self.controlnet_processors["canny"] = CannyDetector()
-                logger.info("✅ Loaded Canny processor (GPU)")
+                logger.info("✅ Loaded Canny processor (CPU)")
             elif control_type == "openpose":
                 from controlnet_aux import OpenposeDetector
+                openpose_gpu = get_optimal_gpu("openpose_processor")
                 self.controlnet_processors["openpose"] = OpenposeDetector.from_pretrained(
                     "lllyasviel/Annotators",
-                    device="cuda"  # uses torch on GPU
+                    device=f"cuda:{openpose_gpu}"
                 )
-                logger.info("✅ Loaded OpenPose processor (GPU)")
+                logger.info(f"✅ Loaded OpenPose processor (GPU {openpose_gpu})")
             elif control_type == "depth":
                 from transformers import pipeline
-                # USE GPU - WE HAVE 24GB VRAM!
+                depth_gpu = get_optimal_gpu("depth_processor")
                 self.controlnet_processors["depth"] = pipeline(
                     "depth-estimation",
                     model="Intel/dpt-large",
-                    device=0 if DEVICE.type == "cuda" else -1
+                    device=depth_gpu if DEVICE.type == "cuda" else -1
                 )
-                logger.info("✅ Loaded Depth processor (GPU)")
+                logger.info(f"✅ Loaded Depth processor (GPU {depth_gpu})")
         except Exception as e:
             logger.warning(f"⚠️ Failed to load {control_type} processor: {e}")
     
@@ -646,7 +689,14 @@ class MultiLoRAComposer:
                 control_type = ControlNetType.none
         
         # IMPORTANT: Generator must be on the same device
-        generator = torch.Generator(device=DEVICE).manual_seed(seed)
+        if control_type == ControlNetType.none:
+            pipe = self.pipe_base
+        else:
+            pipe = self._get_cn_pipeline(control_type.value)
+        self._set_scheduler_for_pipeline(pipe, scheduler)
+
+        pipe_device = next(pipe.unet.parameters()).device
+        generator = torch.Generator(device=pipe_device).manual_seed(seed)
         
         logger.info(f"🎨 Generating {num_images} image(s) at {width}x{height}")
         logger.info(f"🎨 ControlNet: {control_type.value}, LoRAs: {loras_loaded}, Seed: {seed}")
@@ -654,13 +704,9 @@ class MultiLoRAComposer:
         # Generate with appropriate pipeline
         try:
             # Use autocast and inference mode for performance
-            with torch.inference_mode(), torch.autocast(
-                device_type="cuda" if DEVICE.type == "cuda" else "cpu",
-                dtype=AMP_DTYPE
-            ):
+            with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=AMP_DTYPE):
                 if control_type == ControlNetType.none:
-                    # Use base pipeline (no ControlNet) - memory efficient
-                    images = self.pipe_base(
+                    images = pipe(
                         prompt=prompt,
                         negative_prompt=negative_prompt,
                         num_inference_steps=steps,
@@ -668,26 +714,21 @@ class MultiLoRAComposer:
                         width=width,
                         height=height,
                         num_images_per_prompt=num_images,
-                        generator=generator
+                        generator=generator,
                     ).images
                 else:
-                    # Use ControlNet pipeline - lazy loaded
-                    cn_pipeline = self._get_cn_pipeline(control_type.value)
-                    # Set scheduler for CN pipeline
-                    self._set_scheduler_for_pipeline(cn_pipeline, scheduler)
-                    # Batch control image properly for Diffusers
                     control_batch = self._batch_control(control_image, num_images)
-                    images = cn_pipeline(
+                    images = pipe(
                         prompt=prompt,
                         negative_prompt=negative_prompt,
-                        image=control_batch,  # List of PIL RGB images
+                        image=control_batch,
                         num_inference_steps=steps,
                         guidance_scale=guidance_scale,
                         controlnet_conditioning_scale=controlnet_conditioning_scale,
                         width=width,
                         height=height,
                         num_images_per_prompt=num_images,
-                        generator=generator
+                        generator=generator,
                     ).images
             
             # Convert images to base64
