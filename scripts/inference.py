@@ -315,6 +315,30 @@ class MultiLoRAComposer:
         else:
             return img.resize((width, height), Image.BICUBIC)
     
+    def _ensure_pil_rgb(self, img: Union[Image.Image, np.ndarray]) -> Image.Image:
+        """Normalize control image to RGB PIL format"""
+        if isinstance(img, np.ndarray):
+            if img.ndim == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            elif img.ndim == 3 and img.shape[2] == 1:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            elif img.ndim == 3 and img.shape[2] == 3:
+                pass
+            else:
+                raise ValueError(f"Unexpected control image shape: {img.shape}")
+            img = Image.fromarray(img)
+        elif isinstance(img, Image.Image):
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+        else:
+            raise TypeError(f"Unsupported control image type: {type(img)}")
+        return img
+    
+    def _batch_control(self, img: Union[Image.Image, np.ndarray], num: int) -> List[Image.Image]:
+        """Convert control image to proper batch format for Diffusers"""
+        pil = self._ensure_pil_rgb(img)
+        return [pil] * num  # broadcast to batch
+    
     def process_control_image(self, image_data: str, control_type: ControlNetType, width: int, height: int) -> Union[Image.Image, np.ndarray, None]:
         """
         Process control image and return PIL or numpy array
@@ -339,12 +363,15 @@ class MultiLoRAComposer:
             
             # Process based on type
             if control_type == ControlNetType.canny:
-                # Canny returns numpy array
+                # Canny returns numpy array - convert to PIL RGB
                 opencv_image = cv2.cvtColor(np.array(control_image), cv2.COLOR_RGB2BGR)
-                processed = processor(opencv_image)
+                processed = processor(opencv_image)  # HxW uint8
                 # Ensure correct size
                 processed = self._resize_control_image(processed, width, height)
-                return processed  # Return numpy array
+                # Convert to 3-channel if needed, then PIL RGB
+                if processed.ndim == 2:
+                    processed = cv2.cvtColor(processed, cv2.COLOR_GRAY2RGB)
+                return Image.fromarray(processed).convert("RGB")
                 
             elif control_type == ControlNetType.depth:
                 # Depth estimation returns PIL
@@ -367,16 +394,20 @@ class MultiLoRAComposer:
                 else:
                     depth_3channel = depth_normalized
                 
-                # Resize and return as PIL image
+                # Resize and return as PIL RGB image
                 depth_pil = Image.fromarray(depth_3channel)
-                return self._resize_control_image(depth_pil, width, height)
+                depth_resized = self._resize_control_image(depth_pil, width, height)
+                return depth_resized.convert("RGB")
                 
             elif control_type == ControlNetType.openpose:
-                # OpenPose returns detected pose
+                # OpenPose returns detected pose - ensure RGB PIL
                 processed = processor(control_image)
                 # Ensure correct size
                 processed = self._resize_control_image(processed, width, height)
-                return processed
+                # Ensure RGB PIL format
+                if isinstance(processed, np.ndarray):
+                    processed = Image.fromarray(processed)
+                return processed.convert("RGB")
                 
             else:
                 return control_image
@@ -637,10 +668,12 @@ class MultiLoRAComposer:
                     cn_pipeline = self._get_cn_pipeline(control_type.value)
                     # Set scheduler for CN pipeline
                     self._set_scheduler_for_pipeline(cn_pipeline, scheduler)
+                    # Batch control image properly for Diffusers
+                    control_batch = self._batch_control(control_image, num_images)
                     images = cn_pipeline(
                         prompt=prompt,
                         negative_prompt=negative_prompt,
-                        image=control_image,  # PIL or numpy - diffusers will handle
+                        image=control_batch,  # List of PIL RGB images
                         num_inference_steps=steps,
                         guidance_scale=guidance_scale,
                         controlnet_conditioning_scale=controlnet_conditioning_scale,
