@@ -46,6 +46,10 @@ app = FastAPI(title="Vibez Multi-LoRA Inference API")
 # SINGLE SOURCE OF TRUTH FOR DEVICE AND DTYPE
 # ==============================================================================
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+if DEVICE.type != "cuda":
+    raise RuntimeError("CUDA not available. This service requires a GPU.")
+
 DTYPE = torch.float16 if DEVICE.type == "cuda" else torch.float32
 
 # Autocast dtype - bf16 if available, else optimal for device
@@ -285,25 +289,28 @@ class MultiLoRAComposer:
     
     
     def _load_processor_on_demand(self, control_type: str):
-        """Load a single processor on demand (keep on CPU to save VRAM)"""
+        """Load a single processor on demand (USE GPU FOR SPEED)"""
         try:
             if control_type == "canny":
                 from controlnet_aux import CannyDetector
                 self.controlnet_processors["canny"] = CannyDetector()
-                logger.info("✅ Loaded Canny processor (CPU)")
+                logger.info("✅ Loaded Canny processor (GPU)")
             elif control_type == "openpose":
                 from controlnet_aux import OpenposeDetector
-                self.controlnet_processors["openpose"] = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
-                logger.info("✅ Loaded OpenPose processor (CPU)")
+                self.controlnet_processors["openpose"] = OpenposeDetector.from_pretrained(
+                    "lllyasviel/Annotators",
+                    device="cuda"  # uses torch on GPU
+                )
+                logger.info("✅ Loaded OpenPose processor (GPU)")
             elif control_type == "depth":
                 from transformers import pipeline
-                # Force CPU to save VRAM - preprocessors don't need GPU
+                # USE GPU - WE HAVE 24GB VRAM!
                 self.controlnet_processors["depth"] = pipeline(
                     "depth-estimation",
                     model="Intel/dpt-large",
-                    device=-1  # Always CPU for VRAM savings
+                    device=0 if DEVICE.type == "cuda" else -1
                 )
-                logger.info("✅ Loaded Depth processor (CPU)")
+                logger.info("✅ Loaded Depth processor (GPU)")
         except Exception as e:
             logger.warning(f"⚠️ Failed to load {control_type} processor: {e}")
     
