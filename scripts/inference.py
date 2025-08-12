@@ -48,10 +48,17 @@ app = FastAPI(title="Vibez Multi-LoRA Inference API")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float16 if DEVICE.type == "cuda" else torch.float32
 
-logger.info(f"🔧 Device: {DEVICE}, Dtype: {DTYPE}")
+# Autocast dtype - bf16 if available, else optimal for device
+AMP_DTYPE = (
+    torch.bfloat16 if (DEVICE.type == "cuda" and torch.cuda.is_bf16_supported())
+    else (torch.float16 if DEVICE.type == "cuda" else torch.bfloat16)
+)
+
+logger.info(f"🔧 Device: {DEVICE}, Dtype: {DTYPE}, AMP: {AMP_DTYPE}")
 if DEVICE.type == "cuda":
     logger.info(f"🔍 CUDA device: {torch.cuda.get_device_name(0)}")
     logger.info(f"🔍 CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+    logger.info(f"🔍 BF16 supported: {torch.cuda.is_bf16_supported()}")
     # Enable cudnn benchmark for performance
     torch.backends.cudnn.benchmark = True
 
@@ -127,6 +134,7 @@ class MultiLoRAComposer:
         self.s3_client = None
         self.lora_cache = {}
         self.active_loras = {}
+        self.adapter_paths = {}  # adapter_name -> local_path for reliable reapplication
         self.temp_dir = tempfile.mkdtemp(prefix="lora_cache_")
         
         self._initialize_base_pipeline()
@@ -252,15 +260,13 @@ class MultiLoRAComposer:
             use_karras_sigmas=True
         )
         
-        # Apply any active LoRAs to CN pipeline
+        # Apply any active LoRAs to CN pipeline using stored paths
         if hasattr(self, 'active_loras') and self.active_loras:
             logger.info(f"🔄 Applying {len(self.active_loras)} LoRAs to ControlNet pipeline...")
             try:
                 for adapter_name, weight in self.active_loras.items():
-                    # LoRAs should already be downloaded, just load them
-                    local_path = next((os.path.join(self.temp_dir, f) for f in os.listdir(self.temp_dir) 
-                                     if adapter_name.replace('_', '') in f), None)
-                    if local_path:
+                    local_path = self.adapter_paths.get(adapter_name)
+                    if local_path and os.path.exists(local_path):
                         self.pipe_cn.load_lora_weights(local_path, adapter_name=adapter_name)
                 
                 self.pipe_cn.set_adapters(
@@ -379,18 +385,18 @@ class MultiLoRAComposer:
             logger.error(f"Error processing control image: {e}")
             return None
     
-    def _verify_device_consistency(self):
+    def _verify_device_consistency(self, pipe):
         """Verify all components are on the same device with same dtype"""
         try:
             # Check UNet
-            unet_device = next(self.pipeline.unet.parameters()).device
-            unet_dtype = next(self.pipeline.unet.parameters()).dtype
+            unet_device = next(pipe.unet.parameters()).device
+            unet_dtype = next(pipe.unet.parameters()).dtype
             logger.info(f"🔍 UNet: {unet_device}, {unet_dtype}")
             
-            # Check ControlNet
-            if hasattr(self.pipeline, 'controlnet'):
-                cn_device = next(self.pipeline.controlnet.parameters()).device
-                cn_dtype = next(self.pipeline.controlnet.parameters()).dtype
+            # Check ControlNet if present
+            if hasattr(pipe, 'controlnet') and pipe.controlnet is not None:
+                cn_device = next(pipe.controlnet.parameters()).device
+                cn_dtype = next(pipe.controlnet.parameters()).dtype
                 logger.info(f"🔍 ControlNet: {cn_device}, {cn_dtype}")
                 
                 # Assert consistency
@@ -398,8 +404,8 @@ class MultiLoRAComposer:
                 assert unet_dtype == cn_dtype, f"Dtype mismatch: UNet {unet_dtype} vs ControlNet {cn_dtype}"
             
             # Check VAE
-            vae_device = next(self.pipeline.vae.parameters()).device
-            vae_dtype = next(self.pipeline.vae.parameters()).dtype
+            vae_device = next(pipe.vae.parameters()).device
+            vae_dtype = next(pipe.vae.parameters()).dtype
             logger.info(f"🔍 VAE: {vae_device}, {vae_dtype}")
             
             logger.info("✅ Device consistency verified")
@@ -436,8 +442,9 @@ class MultiLoRAComposer:
                     logger.error(f"Failed both loading methods: file={e1}, folder={e2}")
                     raise e2
             
-            # Track this LoRA
+            # Track this LoRA and store its path
             self.active_loras[adapter_name] = weight
+            self.adapter_paths[adapter_name] = local_path
             
             # Apply to base pipeline
             self.pipe_base.set_adapters(
@@ -526,6 +533,7 @@ class MultiLoRAComposer:
                     logger.debug(f"No LoRA weights to unload from CN: {e}")
             
             self.active_loras = {}
+            self.adapter_paths = {}
             logger.info("Cleared all LoRAs from both pipelines")
     
     def _set_scheduler_for_pipeline(self, pipeline, scheduler_type: SchedulerType):
@@ -571,7 +579,7 @@ class MultiLoRAComposer:
             seed = random.randint(0, 2**32 - 1)
             logger.info(f"Generated random seed: {seed}")
         
-        # Set scheduler on base pipeline (will copy to CN pipeline when loaded)
+        # Set scheduler on base pipeline 
         self._set_scheduler_for_pipeline(self.pipe_base, scheduler)
         
         # Clear any previous LoRAs (important for stateless inference)
@@ -610,7 +618,7 @@ class MultiLoRAComposer:
             # Use autocast and inference mode for performance
             with torch.inference_mode(), torch.autocast(
                 device_type="cuda" if DEVICE.type == "cuda" else "cpu",
-                dtype=DTYPE
+                dtype=AMP_DTYPE
             ):
                 if control_type == ControlNetType.none:
                     # Use base pipeline (no ControlNet) - memory efficient
@@ -627,6 +635,8 @@ class MultiLoRAComposer:
                 else:
                     # Use ControlNet pipeline - lazy loaded
                     cn_pipeline = self._get_cn_pipeline(control_type.value)
+                    # Set scheduler for CN pipeline
+                    self._set_scheduler_for_pipeline(cn_pipeline, scheduler)
                     images = cn_pipeline(
                         prompt=prompt,
                         negative_prompt=negative_prompt,
@@ -668,7 +678,13 @@ class MultiLoRAComposer:
         except Exception as e:
             logger.error(f"Generation failed: {e}")
             # Log device info for debugging
-            self._verify_device_consistency()
+            try:
+                if control_type == ControlNetType.none:
+                    self._verify_device_consistency(self.pipe_base)
+                else:
+                    self._verify_device_consistency(self.pipe_cn)
+            except:
+                pass  # Don't let verification errors mask the original error
             raise
     
     def cleanup(self):
