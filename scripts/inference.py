@@ -253,9 +253,9 @@ class MultiLoRAComposer:
         
         # ControlNet repository mapping
         controlnet_repos = {
-            "canny": "diffusers/controlnet-canny-sdxl-1.0-small",
+            "canny": "diffusers/controlnet-canny-sdxl-1.0",
             "depth": "diffusers/controlnet-depth-sdxl-1.0", 
-            "openpose": "thibaud/controlnet-openpose-sdxl-1.0",
+            "openpose": "xinsir/controlnet-openpose-sdxl-1.0",
         }
         
         if control_type not in controlnet_repos:
